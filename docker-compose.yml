@@ -65,6 +65,12 @@ services:
       QUOTA_ACTIVE_JOBS: ${QUOTA_ACTIVE_JOBS:-3}
       QUOTA_DAILY_JOBS: ${QUOTA_DAILY_JOBS:-20}
       MAX_ITEMS_LIMIT: ${MAX_ITEMS_LIMIT:-500}
+      # Post analysis with Claude (project runs); without a key projects only search
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANALYSIS_MODEL: ${ANALYSIS_MODEL:-claude-opus-5-5}
+      ANALYSIS_EFFORT: ${ANALYSIS_EFFORT:-low}
+      COMMENTS_PER_RUN: ${COMMENTS_PER_RUN:-15}
+      COMMENTS_PER_POST: ${COMMENTS_PER_POST:-30}
     ports:
       - "127.0.0.1:8080:8080" # for local development (vite dev server proxies here)
     depends_on:
@@ -84,6 +90,8 @@ services:
       WORKER_TOKEN: ${WORKER_TOKEN:-dev-worker-token-change-me}
       THREADS_STORAGE_STATE_PATH: /run/threads/threads-storageState.json
       PROXY_URLS: ${PROXY_URLS:-}
+      # Post pages opened per search to fetch the parent post / other parts of a thread
+      CONTEXT_PER_JOB: ${CONTEXT_PER_JOB:-15}
       CRAWLEE_STORAGE_DIR: /tmp/crawlee
     volumes:
       - ./.auth:/run/threads:ro

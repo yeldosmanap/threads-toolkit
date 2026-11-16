@@ -25,6 +25,20 @@ export interface Job {
     isFirstRun: boolean;
     /** Set when the job was started by a recurring search */
     scheduleId: number | null;
+    /** Project runs: every alias is searched, then the posts are classified */
+    projectId: number | null;
+    keywords: string[] | null;
+    analysisStatus: 'pending' | 'running' | 'done' | 'failed' | null;
+    analysisError: string | null;
+    analyzedCount: number;
+    hasRemovedFile: boolean;
+    /** Follow-up collection of comments under negative posts */
+    commentsState: '' | 'queued' | 'running' | 'analyzing' | 'done' | 'failed' | 'canceled';
+    /** Project runs: alias being searched (1-based) and posts kept from it so far */
+    progressKeywordIndex: number | null;
+    progressAliasSeen: number | null;
+    /** The user asked to finish early with what has been collected */
+    stopRequested: boolean;
     createdAt: string;
     startedAt: string | null;
     finishedAt: string | null;
@@ -44,6 +58,8 @@ export interface Limits {
 export type ScheduleKind = 'every_hours' | 'daily';
 
 export interface ScheduleInput {
+    /** Run a whole project (all aliases + analysis) instead of a keyword */
+    projectId?: number | null;
     keyword: string;
     filter: SearchFilter;
     maxItems: number;
@@ -62,9 +78,23 @@ export interface Schedule extends ScheduleInput {
     lastJobId: number | null;
     lastJobStatus: JobStatus | null;
     createdAt: string;
+    projectName: string | null;
+    aliases: string[] | null;
 }
 
 export type PostSort = 'newest' | 'oldest' | 'likes' | 'replies' | 'reposts';
+
+export type Sentiment = 'negative' | 'neutral' | 'positive';
+
+export interface PostAnalysis {
+    sentiment: Sentiment;
+    category: string;
+    market: string;
+    aspects: string[];
+    language: string;
+    reason: string;
+    excluded: boolean;
+}
 
 export interface Post {
     id: string;
@@ -81,6 +111,40 @@ export interface Post {
     links: string[];
     quotedPostUrl: string;
     isNew: boolean;
+    analysis: PostAnalysis | null;
+    /** Collected comments: total and kept ones by sentiment */
+    comments: { total: number; negative?: number; neutral?: number; positive?: number } | null;
+}
+
+export interface Summary {
+    total: number;
+    analyzed: number;
+    kept: number;
+    sentiment: Partial<Record<Sentiment, number>>;
+    excluded: Record<string, number>;
+    aspects: Record<string, Partial<Record<Sentiment, number>>>;
+    languages: Record<string, number>;
+    newBySentiment: Partial<Record<Sentiment, number>>;
+    comments: Partial<Record<Sentiment, number>>;
+}
+
+export interface ProjectInput {
+    name: string;
+    market: string;
+    aliases: string[];
+    officialAccounts: string[];
+    competitors: string[];
+    notes: string;
+}
+
+export interface Project extends ProjectInput {
+    id: number;
+    lastJobId: number | null;
+    lastJobStatus: JobStatus | null;
+    /** Searches of this project in the history */
+    runsCount: number;
+    createdAt: string;
+    updatedAt: string;
 }
 
 export interface PostsPage {
@@ -92,6 +156,9 @@ export interface PostsPage {
 
 export interface PostsParams {
     onlyNew?: boolean;
+    sentiment?: Sentiment | '';
+    aspect?: string;
+    view?: 'kept' | 'removed' | 'all';
     q?: string;
     sort?: PostSort;
     page?: number;
@@ -155,14 +222,32 @@ export const api = {
     listPosts: async (id: number, params: PostsParams) => {
         const qs = new URLSearchParams();
         if (params.onlyNew) qs.set('onlyNew', 'true');
+        if (params.sentiment) qs.set('sentiment', params.sentiment);
+        if (params.aspect) qs.set('aspect', params.aspect);
+        if (params.view) qs.set('view', params.view);
         if (params.q) qs.set('q', params.q);
         if (params.sort) qs.set('sort', params.sort);
         if (params.page) qs.set('page', String(params.page));
         if (params.pageSize) qs.set('pageSize', String(params.pageSize));
         return request<PostsPage>('GET', `/jobs/${id}/posts?${qs.toString()}`);
     },
+    deleteJob: async (id: number) => request<void>('DELETE', `/jobs/${id}`),
+    stopJob: async (id: number) => (await request<{ job: Job }>('POST', `/jobs/${id}/stop`)).job,
     cancelJob: async (id: number) => (await request<{ job: Job }>('POST', `/jobs/${id}/cancel`)).job,
-    downloadUrl: (id: number) => `/api/jobs/${id}/download`,
+    downloadUrl: (id: number, removed = false) => `/api/jobs/${id}/download${removed ? '?file=removed' : ''}`,
+    summary: async (id: number) => (await request<{ summary: Summary }>('GET', `/jobs/${id}/summary`)).summary,
+    listComments: async (jobId: number, postId: string) =>
+        (await request<{ comments: Post[] }>('GET', `/jobs/${jobId}/posts/${encodeURIComponent(postId)}/comments`)).comments,
+
+    listProjects: async () => request<{ projects: Project[]; analysisEnabled: boolean }>('GET', '/projects'),
+    createProject: async (input: ProjectInput) =>
+        (await request<{ project: Project }>('POST', '/projects', input)).project,
+    updateProject: async (id: number, input: ProjectInput) =>
+        (await request<{ project: Project }>('PUT', `/projects/${id}`, input)).project,
+    deleteProject: async (id: number, withRuns = false) =>
+        request<void>('DELETE', `/projects/${id}${withRuns ? '?withRuns=1' : ''}`),
+    runProject: async (id: number, filter: SearchFilter, maxItems: number) =>
+        (await request<{ job: Job }>('POST', `/projects/${id}/run`, { filter, maxItems })).job,
 
     listSchedules: async () => (await request<{ schedules: Schedule[] }>('GET', '/schedules')).schedules,
     createSchedule: async (input: ScheduleInput) =>

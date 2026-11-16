@@ -92,3 +92,35 @@ func TestScheduleInput(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectInput(t *testing.T) {
+	in, msg := projectInput(projectRequest{
+		Name:             "  Beeline   KZ ",
+		Aliases:          []string{"билайн", " Билайн ", "", "@beeline_kz"},
+		OfficialAccounts: []string{"@beeline_kz", "beeline_kz"},
+		Competitors:      []string{"Activ", "activ", "Kcell"},
+		Notes:            "Starlink Mobile — услуга Beeline",
+	})
+	if msg != "" {
+		t.Fatalf("unexpected error: %s", msg)
+	}
+	if in.Name != "Beeline KZ" || in.Market != "Казахстан" || len(in.Aliases) != 2 || len(in.OfficialAccounts) != 1 ||
+		in.OfficialAccounts[0] != "beeline_kz" || len(in.Competitors) != 2 {
+		t.Fatalf("normalized: %+v", in)
+	}
+	many := make([]string, 11)
+	for i := range many {
+		many[i] = strings.Repeat("a", i+1)
+	}
+	for _, bad := range []projectRequest{
+		{Name: "", Aliases: []string{"x"}},
+		{Name: "x"},
+		{Name: "x", Aliases: many},
+		{Name: "x", Aliases: []string{"x"}, OfficialAccounts: []string{"bad account!"}},
+		{Name: "x", Aliases: []string{"x"}, Notes: strings.Repeat("я", 2001)},
+	} {
+		if _, msg := projectInput(bad); msg == "" {
+			t.Errorf("expected error for %+v", bad)
+		}
+	}
+}

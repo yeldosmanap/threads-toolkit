@@ -30,7 +30,7 @@ import {
  * Execute profile action
  */
 export async function profileAction(input: ProfileInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
-    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
+    const { pushItem, createProxyConfiguration, onProgress, shouldStop } = resolveHooks(hooks);
     const { username, proxyConfiguration: proxyConfig, maxItems = 20, includePosts = true, useCookies = false, storageState, rateLimitConfig = {} } = input;
 
     // Merge with defaults
@@ -243,7 +243,7 @@ export async function profileAction(input: ProfileInput, log: Log, hooks: Action
                         }, { captured: urls, key: threadsVideoRequestsKey });
                     }
 
-                    const posts = (await scrollForPosts(page, maxItems, log, { ...input, onProgress })).slice(0, maxItems);
+                    const posts = (await scrollForPosts(page, maxItems, log, { ...input, onProgress, shouldStop })).slice(0, maxItems);
                     let savedCount = 0;
                     for (const post of posts) {
                         const postValidation = validatePost(post);

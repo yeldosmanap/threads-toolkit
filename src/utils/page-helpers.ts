@@ -204,7 +204,7 @@ export async function scrollForPosts(
     page: Page,
     maxItems: number,
     log: Log,
-    scrollConfig: ScrollConfig & { onProgress?: (postsSeen: number) => void } = {},
+    scrollConfig: ScrollConfig & { onProgress?: (postsSeen: number) => void; shouldStop?: () => boolean } = {},
 ): Promise<ThreadsPost[]> {
     const SCROLL_DELAY = Math.max(0, scrollConfig.scrollDelay ?? DEFAULT_SCROLL_CONFIG.scrollDelay);
     const MAX_NO_NEW_CONTENT = Math.max(1, scrollConfig.maxEmptyScrolls ?? DEFAULT_SCROLL_CONFIG.maxEmptyScrolls);
@@ -244,6 +244,12 @@ export async function scrollForPosts(
     });
 
     for (let i = 0; i < maxAttempts && noNewContentCount < MAX_NO_NEW_CONTENT; i++) {
+        // The user asked to finish early: keep what was collected
+        if (scrollConfig.shouldStop?.()) {
+            log.info('Scroll: stop requested', { total: collected.size });
+            break;
+        }
+
         // Check global timeout
         if (Date.now() - startTime > GLOBAL_TIMEOUT) {
             log.info('Scroll: timeout reached', { elapsed: Math.round((Date.now() - startTime) / 1000), total: seenPostIds.size });

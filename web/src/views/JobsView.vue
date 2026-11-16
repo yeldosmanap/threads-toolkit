@@ -10,7 +10,16 @@ const limits = ref<Limits | null>(null);
 const loading = ref(true);
 const loadError = ref('');
 
-const hasActive = computed(() => jobs.value.some((j) => j.status === 'queued' || j.status === 'running'));
+const hasActive = computed(() =>
+    jobs.value.some(
+        (j) =>
+            j.status === 'queued' ||
+            j.status === 'running' ||
+            j.analysisStatus === 'pending' ||
+            j.analysisStatus === 'running' ||
+            ['queued', 'running', 'analyzing'].includes(j.commentsState),
+    ),
+);
 
 async function refresh(): Promise<void> {
     try {
@@ -51,6 +60,11 @@ function onCreated(job: Job): void {
     void refresh().then(schedule);
 }
 
+function onDeleted(id: number): void {
+    jobs.value = jobs.value.filter((j) => j.id !== id);
+    void refresh();
+}
+
 function onChanged(job: Job): void {
     jobs.value = jobs.value.map((j) => (j.id === job.id ? job : j));
     void refresh();
@@ -83,7 +97,7 @@ onBeforeUnmount(() => {
         </p>
     </div>
     <div v-else class="list">
-        <JobCard v-for="job in jobs" :key="job.id" :job="job" @changed="onChanged" />
+        <JobCard v-for="job in jobs" :key="job.id" :job="job" @changed="onChanged" @deleted="onDeleted" />
     </div>
 </template>
 

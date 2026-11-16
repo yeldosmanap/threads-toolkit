@@ -34,8 +34,8 @@ export function describeSchedule(s: Pick<ScheduleInput, 'kind' | 'everyHours' | 
 
 /** Copy of a schedule's editable fields, e.g. to toggle `enabled` via PUT */
 export function toInput(s: Schedule): ScheduleInput {
-    const { keyword, filter, maxItems, kind, everyHours, dailyTime, timezone, enabled } = s;
-    return { keyword, filter, maxItems, kind, everyHours, dailyTime, timezone, enabled };
+    const { projectId, keyword, filter, maxItems, kind, everyHours, dailyTime, timezone, enabled } = s;
+    return { projectId, keyword, filter, maxItems, kind, everyHours, dailyTime, timezone, enabled };
 }
 
 const rtf = new Intl.RelativeTimeFormat('ru-RU', { numeric: 'auto' });

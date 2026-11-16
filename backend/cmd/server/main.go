@@ -15,9 +15,11 @@ import (
 	// Embed the IANA timezone database: the distroless image has none, and daily schedules need it
 	_ "time/tzdata"
 
+	"github.com/yeldosmanap/threads-toolkit/backend/internal/analysis"
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/api"
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/config"
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/db"
+	"github.com/yeldosmanap/threads-toolkit/backend/internal/pipeline"
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/storage"
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/store"
 )
@@ -60,9 +62,23 @@ func run(log *slog.Logger) error {
 	go maintenance(ctx, st, cfg, log)
 	go scheduler(ctx, st, cfg, log)
 
+	analysisEnabled := cfg.AnthropicAPIKey != ""
+	if analysisEnabled {
+		clf, err := analysis.NewClassifier(analysis.Options{APIKey: cfg.AnthropicAPIKey, Model: cfg.AnalysisModel, Effort: cfg.AnalysisEffort})
+		if err != nil {
+			return err
+		}
+		analyzer := &pipeline.Analyzer{Store: st, Files: files, Classifier: clf, Log: log, Concurrency: cfg.AnalysisConcurrency,
+			CommentsPerRun: cfg.CommentsPerRun, CommentsPerPost: cfg.CommentsPerPost}
+		go analyzer.Run(ctx)
+		log.Info("post analysis enabled", "model", cfg.AnalysisModel, "effort", cfg.AnalysisEffort)
+	} else {
+		log.Warn("ANTHROPIC_API_KEY is not set: project runs will not be analyzed")
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.New(cfg, st, files, log).Routes(),
+		Handler:           api.New(cfg, st, files, log, analysisEnabled).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       2 * time.Minute, // worker uploads results in one request
 		WriteTimeout:      2 * time.Minute,

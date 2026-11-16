@@ -21,3 +21,6 @@ exports
 
 # Local secrets for docker compose
 .env
+
+# Classifier evaluation outputs (contain post texts)
+eval-out

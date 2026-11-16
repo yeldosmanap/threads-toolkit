@@ -28,7 +28,7 @@ import {
  * Execute hashtag action
  */
 export async function hashtagAction(input: HashtagInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
-    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
+    const { pushItem, createProxyConfiguration, onProgress, shouldStop } = resolveHooks(hooks);
     const {
         tag,
         filter = 'recent',
@@ -217,7 +217,7 @@ export async function hashtagAction(input: HashtagInput, log: Log, hooks: Action
             }
 
             // Scroll to load more posts
-            const posts = await scrollForPosts(page, maxItems, log, { ...input, onProgress });
+            const posts = await scrollForPosts(page, maxItems, log, { ...input, onProgress, shouldStop });
 
             // Extract posts using centralized parser
             log.info('Extracted posts from page', { count: posts.length });

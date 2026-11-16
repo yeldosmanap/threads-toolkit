@@ -14,6 +14,8 @@ import (
 )
 
 type scheduleRequest struct {
+	// Run a whole project instead of a keyword (keyword is then ignored)
+	ProjectID  *int64 `json:"projectId"`
 	Keyword    string `json:"keyword"`
 	Filter     string `json:"filter"`
 	MaxItems   int    `json:"maxItems"`
@@ -40,6 +42,9 @@ type scheduleResponse struct {
 	LastJobID     *int64     `json:"lastJobId"`
 	LastJobStatus *string    `json:"lastJobStatus"`
 	CreatedAt     time.Time  `json:"createdAt"`
+	ProjectID     *int64     `json:"projectId"`
+	ProjectName   *string    `json:"projectName"`
+	Aliases       []string   `json:"aliases"`
 }
 
 func toScheduleResponse(sc store.Schedule) scheduleResponse {
@@ -48,6 +53,7 @@ func toScheduleResponse(sc store.Schedule) scheduleResponse {
 		Kind: sc.Spec.Kind, EveryHours: sc.Spec.EveryHours, DailyTime: sc.Spec.DailyTime, Timezone: sc.Spec.Timezone,
 		Enabled: sc.Enabled, NextRunAt: sc.NextRunAt, LastRunAt: sc.LastRunAt, LastError: sc.LastError,
 		LastJobID: sc.LastJobID, LastJobStatus: sc.LastJobStatus, CreatedAt: sc.CreatedAt,
+		ProjectID: sc.ProjectID, ProjectName: sc.ProjectName, Aliases: sc.ProjectAliases,
 	}
 }
 
@@ -75,7 +81,26 @@ func (s *Server) scheduleInput(req scheduleRequest) (store.ScheduleInput, string
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	return store.ScheduleInput{Keyword: job.Keyword, Filter: job.Filter, MaxItems: job.MaxItems, Spec: spec, Enabled: enabled}, ""
+	return store.ScheduleInput{ProjectID: req.ProjectID, Keyword: job.Keyword, Filter: job.Filter, MaxItems: job.MaxItems, Spec: spec, Enabled: enabled}, ""
+}
+
+// resolveScheduleProject checks that a project schedule points to the user's own project
+// and uses the project name as the schedule's display keyword. Returns false after writing an error.
+func (s *Server) resolveScheduleProject(w http.ResponseWriter, r *http.Request, req *scheduleRequest) bool {
+	if req.ProjectID == nil {
+		return true
+	}
+	p, err := s.store.GetProject(r.Context(), userFrom(r.Context()).ID, *req.ProjectID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "invalid_schedule", "Проект не найден")
+		return false
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+	req.Keyword = p.Name
+	return true
 }
 
 func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +120,9 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r.Context())
 	var req scheduleRequest
 	if !decodeJSON(w, r, 4<<10, &req) {
+		return
+	}
+	if !s.resolveScheduleProject(w, r, &req) {
 		return
 	}
 	in, msg := s.scheduleInput(req)
@@ -137,6 +165,9 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	var req scheduleRequest
 	if !decodeJSON(w, r, 4<<10, &req) {
+		return
+	}
+	if !s.resolveScheduleProject(w, r, &req) {
 		return
 	}
 	in, msg := s.scheduleInput(req)

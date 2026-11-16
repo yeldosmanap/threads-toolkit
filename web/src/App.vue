@@ -2,6 +2,7 @@
 import { useRouter } from 'vue-router';
 
 import { currentUser, logout } from './auth';
+import ConfirmDialog from './components/ConfirmDialog.vue';
 
 const router = useRouter();
 
@@ -19,6 +20,7 @@ async function onLogout(): Promise<void> {
                 <span class="brand-text">Threads Toolkit</span>
             </RouterLink>
             <nav v-if="currentUser" class="nav">
+                <RouterLink to="/projects" active-class="active">Проекты</RouterLink>
                 <RouterLink to="/" exact-active-class="active">Поиски</RouterLink>
                 <RouterLink to="/schedules" active-class="active">Регулярные</RouterLink>
             </nav>
@@ -31,6 +33,7 @@ async function onLogout(): Promise<void> {
     <main class="container main">
         <RouterView />
     </main>
+    <ConfirmDialog />
 </template>
 
 <style scoped>
@@ -59,8 +62,15 @@ async function onLogout(): Promise<void> {
 .nav {
     display: flex;
     gap: 4px;
+    min-width: 0;
     margin-right: auto;
     margin-left: 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.nav a {
+    flex-shrink: 0;
 }
 
 .nav a {
@@ -82,6 +92,7 @@ async function onLogout(): Promise<void> {
 }
 
 .user {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -108,6 +119,15 @@ async function onLogout(): Promise<void> {
 
     .nav {
         margin-left: 4px;
+    }
+
+    .nav a {
+        padding: 6px 8px;
+        font-size: 13px;
+    }
+
+    .topbar-inner {
+        gap: 8px;
     }
 }
 

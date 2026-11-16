@@ -34,6 +34,16 @@ type Config struct {
 	QuotaSchedules   int
 	MinScheduleHours int
 
+	// Post analysis with Claude (project runs). Empty key = analysis disabled.
+	AnthropicAPIKey     string
+	AnalysisModel       string
+	AnalysisEffort      string
+	AnalysisConcurrency int
+	QuotaProjects       int
+	// After analysis: collect comments under up to CommentsPerRun negative posts (0 = off), CommentsPerPost each
+	CommentsPerRun  int
+	CommentsPerPost int
+
 	// A running job without a heartbeat for this long is considered abandoned
 	JobStaleAfter  time.Duration
 	JobMaxAttempts int
@@ -41,25 +51,32 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		ListenAddr:       env("LISTEN_ADDR", ":8080"),
-		DatabaseURL:      env("DATABASE_URL", ""),
-		WorkerToken:      env("WORKER_TOKEN", ""),
-		S3Endpoint:       env("S3_ENDPOINT", ""),
-		S3Region:         env("S3_REGION", "us-east-1"),
-		S3Bucket:         env("S3_BUCKET", "threads-exports"),
-		S3AccessKey:      env("S3_ACCESS_KEY", ""),
-		S3SecretKey:      env("S3_SECRET_KEY", ""),
-		S3PathStyle:      envBool("S3_PATH_STYLE", true),
-		CookieSecure:     envBool("COOKIE_SECURE", false),
-		SessionTTL:       envDuration("SESSION_TTL", 30*24*time.Hour),
-		QuotaActiveJobs:  envInt("QUOTA_ACTIVE_JOBS", 3),
-		QuotaDailyJobs:   envInt("QUOTA_DAILY_JOBS", 20),
-		MaxItemsLimit:    envInt("MAX_ITEMS_LIMIT", 500),
-		DefaultMaxItems:  envInt("DEFAULT_MAX_ITEMS", 100),
-		QuotaSchedules:   envInt("QUOTA_SCHEDULES", 5),
-		MinScheduleHours: envInt("MIN_SCHEDULE_HOURS", 6),
-		JobStaleAfter:    envDuration("JOB_STALE_AFTER", 3*time.Minute),
-		JobMaxAttempts:   envInt("JOB_MAX_ATTEMPTS", 2),
+		ListenAddr:          env("LISTEN_ADDR", ":8080"),
+		DatabaseURL:         env("DATABASE_URL", ""),
+		WorkerToken:         env("WORKER_TOKEN", ""),
+		S3Endpoint:          env("S3_ENDPOINT", ""),
+		S3Region:            env("S3_REGION", "us-east-1"),
+		S3Bucket:            env("S3_BUCKET", "threads-exports"),
+		S3AccessKey:         env("S3_ACCESS_KEY", ""),
+		S3SecretKey:         env("S3_SECRET_KEY", ""),
+		S3PathStyle:         envBool("S3_PATH_STYLE", true),
+		CookieSecure:        envBool("COOKIE_SECURE", false),
+		SessionTTL:          envDuration("SESSION_TTL", 30*24*time.Hour),
+		QuotaActiveJobs:     envInt("QUOTA_ACTIVE_JOBS", 3),
+		QuotaDailyJobs:      envInt("QUOTA_DAILY_JOBS", 20),
+		MaxItemsLimit:       envInt("MAX_ITEMS_LIMIT", 500),
+		DefaultMaxItems:     envInt("DEFAULT_MAX_ITEMS", 100),
+		QuotaSchedules:      envInt("QUOTA_SCHEDULES", 5),
+		MinScheduleHours:    envInt("MIN_SCHEDULE_HOURS", 6),
+		AnthropicAPIKey:     env("ANTHROPIC_API_KEY", ""),
+		AnalysisModel:       env("ANALYSIS_MODEL", "claude-opus-5-5"),
+		AnalysisEffort:      env("ANALYSIS_EFFORT", "low"),
+		AnalysisConcurrency: envInt("ANALYSIS_CONCURRENCY", 6),
+		QuotaProjects:       envInt("QUOTA_PROJECTS", 10),
+		CommentsPerRun:      envInt("COMMENTS_PER_RUN", 15),
+		CommentsPerPost:     envInt("COMMENTS_PER_POST", 30),
+		JobStaleAfter:       envDuration("JOB_STALE_AFTER", 3*time.Minute),
+		JobMaxAttempts:      envInt("JOB_MAX_ATTEMPTS", 2),
 	}
 
 	var missing []string

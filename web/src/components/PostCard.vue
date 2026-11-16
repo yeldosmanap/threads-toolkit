@@ -1,9 +1,32 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
-import type { Post } from '../api';
+import { ApiError, api, type Post } from '../api';
+import { aspectLabel, LANGUAGE, removalReason, sentimentLabel } from '../labels';
 
-const props = withDefaults(defineProps<{ post: Post; highlight?: string; showNew?: boolean }>(), { showNew: true });
+defineOptions({ name: 'PostCard' });
+
+const props = withDefaults(
+    defineProps<{ post: Post; highlight?: string; showNew?: boolean; jobId?: number; isComment?: boolean }>(),
+    { showNew: true, jobId: 0, isComment: false },
+);
+
+const a = computed(() => props.post.analysis);
+const showReason = ref(false);
+
+// Comments collected under this post (negative posts of project runs)
+const commentsOpen = ref(false);
+const comments = ref<Post[] | null>(null);
+const commentsError = ref('');
+async function toggleComments(): Promise<void> {
+    commentsOpen.value = !commentsOpen.value;
+    if (!commentsOpen.value || comments.value || !props.jobId) return;
+    try {
+        comments.value = await api.listComments(props.jobId, props.post.id);
+    } catch (e) {
+        commentsError.value = e instanceof ApiError ? e.message : 'Не удалось загрузить комментарии';
+    }
+}
 
 const expanded = ref(false);
 const isLong = computed(() => props.post.content.length > 420 || props.post.content.split('\n').length > 7);
@@ -54,8 +77,21 @@ const parts = computed(() => {
                     {{ post.author.name }}
                 </span>
             </div>
-            <span v-if="showNew && post.isNew" class="new-badge">Новый</span>
+            <span class="badges">
+                <span v-if="showNew && post.isNew" class="new-badge">Новый</span>
+                <span v-if="a" :class="['sentiment', a.sentiment]">{{ sentimentLabel(a.sentiment) }}</span>
+            </span>
         </header>
+
+        <div v-if="a" class="labels">
+            <span v-if="a.excluded" class="removed">Отсеян: {{ removalReason(a.category, a.market) }}</span>
+            <span v-for="asp in a.aspects" :key="asp" class="aspect">{{ aspectLabel(asp) }}</span>
+            <span class="muted lang">{{ LANGUAGE[a.language] ?? a.language }}</span>
+            <button class="link-btn small" type="button" @click="showReason = !showReason">
+                {{ showReason ? 'скрыть пояснение' : 'почему так?' }}
+            </button>
+        </div>
+        <p v-if="a && showReason" class="reason">{{ a.reason }}</p>
 
         <p class="content" :class="{ clamped: isLong && !expanded }">
             <template v-for="(part, i) in parts" :key="i">
@@ -81,6 +117,21 @@ const parts = computed(() => {
                 <a :href="post.url" target="_blank" rel="noopener noreferrer">Открыть в Threads ↗</a>
             </span>
         </footer>
+
+        <div v-if="!isComment && post.comments?.total" class="comments">
+            <button class="link-btn" type="button" @click="toggleComments">
+                💬 Комментарии: {{ post.comments.total }}
+                <span v-if="post.comments.negative" class="c-neg">· негатив {{ post.comments.negative }}</span>
+                <span v-if="post.comments.neutral" class="c-neu">· нейтрал {{ post.comments.neutral }}</span>
+                <span v-if="post.comments.positive" class="c-pos">· позитив {{ post.comments.positive }}</span>
+                {{ commentsOpen ? '▴' : '▾' }}
+            </button>
+            <div v-if="commentsOpen" class="comment-list">
+                <p v-if="commentsError" class="error-box">{{ commentsError }}</p>
+                <p v-else-if="!comments" class="muted">Загрузка…</p>
+                <PostCard v-for="c in comments ?? []" :key="c.id" :post="c" :show-new="false" is-comment />
+            </div>
+        </div>
     </article>
 </template>
 
@@ -126,6 +177,104 @@ const parts = computed(() => {
 
 .name {
     font-size: 14px;
+}
+
+.badges {
+    display: flex;
+    flex-shrink: 0;
+    gap: 6px;
+}
+
+.sentiment {
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.sentiment.negative {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+.sentiment.neutral {
+    background: var(--surface-2);
+    color: var(--muted);
+}
+
+.sentiment.positive {
+    background: var(--ok-soft);
+    color: var(--ok);
+}
+
+.labels {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 12px;
+}
+
+.aspect {
+    padding: 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+}
+
+.removed {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-weight: 600;
+}
+
+.lang {
+    margin-left: 2px;
+}
+
+.link-btn.small {
+    margin: 0;
+    font-size: 12px;
+}
+
+.reason {
+    margin: 6px 0 0;
+    padding: 6px 10px;
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.comments {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+}
+
+.c-neg {
+    color: var(--danger);
+}
+
+.c-neu {
+    color: var(--muted);
+}
+
+.c-pos {
+    color: var(--ok);
+}
+
+.comment-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+    padding-left: 12px;
+    border-left: 2px solid var(--border);
+}
+
+.comment-list :deep(.post) {
+    box-shadow: none;
 }
 
 .new-badge {

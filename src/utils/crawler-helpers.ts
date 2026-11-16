@@ -25,6 +25,7 @@ export function resolveHooks(hooks: ActionHooks = {}): Required<ActionHooks> {
         createProxyConfiguration:
             hooks.createProxyConfiguration ?? (async (config) => Actor.createProxyConfiguration(config)),
         onProgress: hooks.onProgress ?? (() => undefined),
+        shouldStop: hooks.shouldStop ?? (() => false),
     };
 }
 

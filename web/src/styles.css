@@ -185,3 +185,16 @@ label {
     font-weight: 600;
     box-shadow: var(--shadow);
 }
+
+.link-btn {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+}
+
+.link-btn:hover {
+    text-decoration: underline;
+}

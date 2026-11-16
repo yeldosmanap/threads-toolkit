@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 
-import { ApiError, api, type Limits, type Schedule, type ScheduleInput, type SearchFilter } from '../api';
+import { ApiError, api, type Limits, type Project, type Schedule, type ScheduleInput, type SearchFilter } from '../api';
 import ScheduleCard from '../components/ScheduleCard.vue';
+import { MENTION_FORMS, plural } from '../labels';
 import { browserTimezone, FREQUENCIES } from '../schedules';
 
 const schedules = ref<Schedule[]>([]);
@@ -10,7 +12,14 @@ const limits = ref<Limits | null>(null);
 const loading = ref(true);
 const loadError = ref('');
 
+const route = useRoute();
 const keyword = ref('');
+// What to run: a project (all its aliases + analysis) or a single keyword
+const projects = ref<Project[]>([]);
+const target = ref<'project' | 'keyword'>('keyword');
+const projectId = ref<number | null>(null);
+const selectedProject = computed(() => projects.value.find((p) => p.id === projectId.value) ?? null);
+const canSubmit = computed(() => (target.value === 'project' ? !!selectedProject.value : !!keyword.value.trim()));
 const filter = ref<SearchFilter>('recent');
 const maxItems = ref(100);
 const frequency = ref('h12');
@@ -27,8 +36,16 @@ const isDaily = computed(() => frequency.value === 'daily');
 
 async function refresh(): Promise<void> {
     try {
-        const [list, lim] = await Promise.all([api.listSchedules(), api.limits()]);
+        const [list, lim, proj] = await Promise.all([api.listSchedules(), api.limits(), api.listProjects()]);
         schedules.value = list;
+        if (!projects.value.length && proj.projects.length) {
+            projects.value = proj.projects;
+            // Default to the project from ?project=<id> (Projects page → «Мониторинг»), else the first project
+            const fromQuery = Number(route.query.project);
+            const wanted = proj.projects.find((p) => p.id === fromQuery);
+            projectId.value = (wanted ?? proj.projects[0]).id;
+            target.value = 'project';
+        }
         if (!limits.value) maxItems.value = lim.defaultMaxItems;
         limits.value = lim;
         loadError.value = '';
@@ -46,7 +63,8 @@ async function submit(): Promise<void> {
     busy.value = true;
     const preset = FREQUENCIES.find((f) => f.value === frequency.value);
     const input: ScheduleInput = {
-        keyword: keyword.value.trim(),
+        projectId: target.value === 'project' ? projectId.value : null,
+        keyword: target.value === 'project' ? (selectedProject.value?.name ?? '') : keyword.value.trim(),
         filter: filter.value,
         maxItems: Number(maxItems.value),
         kind: isDaily.value ? 'daily' : 'every_hours',
@@ -98,13 +116,26 @@ watch(frequencies, (list) => {
     </p>
 
     <form class="card form" @submit.prevent="submit">
+        <div v-if="projects.length" class="target">
+            <label>Что запускать</label>
+            <div class="segmented" role="group" aria-label="Что запускать">
+                <button type="button" :class="{ active: target === 'project' }" @click="target = 'project'">Проект</button>
+                <button type="button" :class="{ active: target === 'keyword' }" @click="target = 'keyword'">Ключевое слово</button>
+            </div>
+        </div>
         <div class="row">
-            <div class="grow">
+            <div v-if="target === 'project'" class="grow">
+                <label for="s-project">Проект</label>
+                <select id="s-project" v-model="projectId" class="select">
+                    <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }} ({{ plural(p.aliases.length, MENTION_FORMS) }})</option>
+                </select>
+            </div>
+            <div v-else class="grow">
                 <label for="s-keyword">Ключевое слово</label>
                 <input id="s-keyword" v-model="keyword" type="text" placeholder="например, билайн" maxlength="100" required autocomplete="off" />
             </div>
             <div class="count">
-                <label for="s-max">Постов</label>
+                <label for="s-max">{{ target === 'project' ? 'На упоминание' : 'Постов' }}</label>
                 <input id="s-max" v-model.number="maxItems" type="number" min="1" :max="limits?.maxItemsLimit ?? 500" required />
             </div>
         </div>
@@ -132,6 +163,7 @@ watch(frequencies, (list) => {
         <p class="muted note">
             <template v-if="isDaily">Время указано по вашему часовому поясу ({{ timezone }}).</template>
             <template v-else>Первый запуск — сразу после создания.</template>
+            <template v-if="target === 'project'"> Каждый запуск проекта ищет по всем упоминаниям, определяет тональность и собирает комментарии к негативным постам.</template>
             Запуски расходуют общий суточный лимит поисков.
         </p>
 
@@ -141,7 +173,7 @@ watch(frequencies, (list) => {
             <span v-if="limits" class="muted quota">
                 Расписаний: {{ schedules.length }} из {{ limits.schedulesLimit }}
             </span>
-            <button class="btn" type="submit" :disabled="busy || atLimit || !keyword.trim()">
+            <button class="btn" type="submit" :disabled="busy || atLimit || !canSubmit">
                 {{ busy ? 'Сохраняем…' : 'Создать расписание' }}
             </button>
         </div>
@@ -214,6 +246,10 @@ watch(frequencies, (list) => {
     background: var(--surface);
     color: var(--text);
     font: inherit;
+}
+
+.target {
+    margin-bottom: 14px;
 }
 
 .note {

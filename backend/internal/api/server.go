@@ -27,14 +27,17 @@ type Server struct {
 	files     *storage.S3
 	log       *slog.Logger
 	authLimit *auth.IPLimiter
+	// Project runs are classified by the pipeline.Analyzer (needs ANTHROPIC_API_KEY)
+	analysisEnabled bool
 }
 
-func New(cfg config.Config, st *store.Store, files *storage.S3, log *slog.Logger) *Server {
+func New(cfg config.Config, st *store.Store, files *storage.S3, log *slog.Logger, analysisEnabled bool) *Server {
 	return &Server{
-		cfg:   cfg,
-		store: st,
-		files: files,
-		log:   log,
+		analysisEnabled: analysisEnabled,
+		cfg:             cfg,
+		store:           st,
+		files:           files,
+		log:             log,
 		// Login/registration: 10 attempts per minute per IP
 		authLimit: auth.NewIPLimiter(10, 10),
 	}
@@ -69,8 +72,18 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/jobs", s.handleCreateJob)
 			r.Get("/jobs/{id}", s.handleGetJob)
 			r.Post("/jobs/{id}/cancel", s.handleCancelJob)
+			r.Post("/jobs/{id}/stop", s.handleStopJob)
+			r.Delete("/jobs/{id}", s.handleDeleteJob)
 			r.Get("/jobs/{id}/download", s.handleDownload)
 			r.Get("/jobs/{id}/posts", s.handleListJobPosts)
+			r.Get("/jobs/{id}/summary", s.handleJobSummary)
+			r.Get("/jobs/{id}/posts/{postId}/comments", s.handleListComments)
+			r.Get("/projects", s.handleListProjects)
+			r.Post("/projects", s.handleCreateProject)
+			r.Get("/projects/{id}", s.handleGetProject)
+			r.Put("/projects/{id}", s.handleUpdateProject)
+			r.Delete("/projects/{id}", s.handleDeleteProject)
+			r.Post("/projects/{id}/run", s.handleRunProject)
 			r.Get("/schedules", s.handleListSchedules)
 			r.Post("/schedules", s.handleCreateSchedule)
 			r.Put("/schedules/{id}", s.handleUpdateSchedule)

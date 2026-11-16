@@ -21,13 +21,18 @@ import (
 //   POST /internal/jobs/{id}/fail       {error}
 
 type claimedJob struct {
-	ID              int64  `json:"id"`
-	Keyword         string `json:"keyword"`
-	Filter          string `json:"filter"`
-	MaxItems        int    `json:"maxItems"`
-	ScrollDelay     int    `json:"scrollDelay"`
-	MaxEmptyScrolls int    `json:"maxEmptyScrolls"`
-	MaxScrollTime   int    `json:"maxScrollTime"`
+	ID      int64  `json:"id"`
+	Keyword string `json:"keyword"`
+	// Project runs: search each of these in turn (falls back to Keyword when empty)
+	Keywords []string `json:"keywords"`
+	// "search" or "comments" (collect comments under PostURLs; MaxItems = comments per post)
+	Kind            string   `json:"kind"`
+	PostURLs        []string `json:"postUrls"`
+	Filter          string   `json:"filter"`
+	MaxItems        int      `json:"maxItems"`
+	ScrollDelay     int      `json:"scrollDelay"`
+	MaxEmptyScrolls int      `json:"maxEmptyScrolls"`
+	MaxScrollTime   int      `json:"maxScrollTime"`
 }
 
 // scrollBudgetSecs: logged-in Threads yields ~6 posts per ~14 s scroll step (~2.5 s/post).
@@ -48,7 +53,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("job claimed", "job", j.ID, "worker", workerID, "attempt", j.Attempts)
 	writeJSON(w, http.StatusOK, map[string]claimedJob{"job": {
-		ID: j.ID, Keyword: j.Keyword, Filter: j.Filter, MaxItems: j.MaxItems,
+		ID: j.ID, Keyword: j.Keyword, Keywords: j.Keywords, Kind: j.Kind, PostURLs: j.PostURLs, Filter: j.Filter, MaxItems: j.MaxItems,
 		ScrollDelay: 3000, MaxEmptyScrolls: 6, MaxScrollTime: scrollBudgetSecs(j.MaxItems),
 	}})
 }
@@ -68,12 +73,14 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		PostsSeen int `json:"postsSeen"`
+		PostsSeen    int  `json:"postsSeen"`
+		KeywordIndex *int `json:"keywordIndex"`
+		AliasSeen    *int `json:"aliasSeen"`
 	}
 	if !decodeJSON(w, r, 1<<10, &body) {
 		return
 	}
-	err := s.store.Heartbeat(r.Context(), id, body.PostsSeen)
+	stop, err := s.store.Heartbeat(r.Context(), id, body.PostsSeen, body.KeywordIndex, body.AliasSeen)
 	if errors.Is(err, store.ErrJobState) {
 		writeError(w, http.StatusConflict, "not_running", "job is not running")
 		return
@@ -82,7 +89,8 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// The worker finishes early with what it has when stop is true
+	writeJSON(w, http.StatusOK, map[string]bool{"stop": stop})
 }
 
 // scrapedPost mirrors ThreadsPost from src/types.ts.
@@ -110,6 +118,10 @@ type scrapedPost struct {
 	QuotedPost *struct {
 		URL string `json:"url"`
 	} `json:"quotedPost"`
+	// Parent post / other parts of a multi-part post, collected by the worker
+	Context string `json:"context"`
+	// Comments jobs: id of the post the comment was collected under
+	ParentID string `json:"parentId"`
 }
 
 func (p scrapedPost) toPost() store.Post {
@@ -119,6 +131,8 @@ func (p scrapedPost) toPost() store.Post {
 		AuthorURL: p.Author.ProfileURL, AuthorVerified: p.Author.IsVerified,
 		Likes: p.Stats.Likes, Replies: p.Stats.Replies, Reposts: p.Stats.Reposts, Shares: p.Stats.Shares,
 		Images: p.Images, Videos: p.Videos, Links: p.Links,
+		Context:  truncateRunes(p.Context, 4000),
+		ParentID: p.ParentID,
 	}
 	if t, err := time.Parse(time.RFC3339, p.Timestamp); err == nil {
 		out.PublishedAt = &t
@@ -138,6 +152,15 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
 		Posts []scrapedPost `json:"posts"`
 	}
 	if !decodeJSON(w, r, 64<<20, &body) {
+		return
+	}
+	// Deleted by the user while it was running: discard the results
+	if dropped, err := s.store.DropIfDeleted(r.Context(), id); err != nil {
+		s.internalError(w, r, err)
+		return
+	} else if dropped {
+		s.log.Info("results of a deleted job discarded", "job", id)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -177,6 +200,17 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
+
+	// Project runs: the analyzer classifies the posts and builds the files afterwards
+	if job.ProjectID != nil && s.analysisEnabled {
+		if err := s.store.MarkScraped(r.Context(), id, len(saved), newCount); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		s.log.Info("job scraped, analysis pending", "job", id, "posts", len(saved), "new", newCount)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	file, err := export.BuildXLSX(saved, job.IsFirstRun)
 	if err == nil {
 		// ASCII-only object key: some S3 implementations sign non-ASCII paths differently.
@@ -209,6 +243,10 @@ func (s *Server) handleFail(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, 16<<10, &body) {
 		return
 	}
+	if dropped, err := s.store.DropIfDeleted(r.Context(), id); err == nil && dropped {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	msg := strings.TrimSpace(body.Error)
 	if msg == "" {
 		msg = "Неизвестная ошибка"
@@ -224,4 +262,11 @@ func (s *Server) handleFail(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Warn("job failed", "job", id, "error", msg)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func truncateRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }

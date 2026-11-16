@@ -176,4 +176,6 @@ export interface ActionHooks {
     createProxyConfiguration?: (config?: ProxyConfiguration) => Promise<CrawleeProxyConfiguration | undefined>;
     /** Called after every scroll step with the number of unique posts parsed so far */
     onProgress?: (postsSeen: number) => void;
+    /** Checked before every scroll step: true = stop scrolling and keep what was collected */
+    shouldStop?: () => boolean;
 }

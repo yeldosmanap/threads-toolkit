@@ -2,12 +2,15 @@
 import { computed, ref } from 'vue';
 
 import { ApiError, api, type Schedule } from '../api';
+import { confirmDialog } from '../confirm';
+import { MENTION_FORMS, plural } from '../labels';
 import { describeSchedule, relativeFromNow, toInput } from '../schedules';
 
 const props = defineProps<{ schedule: Schedule }>();
 const emit = defineEmits<{ changed: [schedule: Schedule]; deleted: [id: number] }>();
 
 const busy = ref(false);
+const title = computed(() => props.schedule.projectName ?? props.schedule.keyword);
 const error = ref('');
 
 const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -51,7 +54,13 @@ async function toggle(): Promise<void> {
 }
 
 async function remove(): Promise<void> {
-    if (!window.confirm(`Удалить регулярный поиск «${props.schedule.keyword}»? Уже собранные результаты останутся.`)) return;
+    const answer = await confirmDialog({
+        title: `Удалить регулярный поиск «${title.value}»?`,
+        message: 'Новые запуски по этому расписанию больше не будут создаваться. Уже собранные результаты останутся в «Поисках».',
+        confirmText: 'Удалить',
+        danger: true,
+    });
+    if (answer !== 'confirm') return;
     busy.value = true;
     error.value = '';
     try {
@@ -68,7 +77,10 @@ async function remove(): Promise<void> {
     <article class="card sched" :class="{ paused: !schedule.enabled }">
         <div class="head">
             <div class="title">
-                <h3>{{ schedule.keyword }}</h3>
+                <h3>
+                    {{ title }}
+                    <span v-if="schedule.projectId" class="tag">проект · {{ plural(schedule.aliases?.length ?? 0, MENTION_FORMS) }}</span>
+                </h3>
                 <span class="meta muted">
                     {{ describeSchedule(schedule) }} · {{ schedule.filter === 'recent' ? 'Свежие' : 'Популярные' }} · до
                     {{ schedule.maxItems }} постов
@@ -135,6 +147,17 @@ h3 {
     margin: 0;
     overflow-wrap: anywhere;
     font-size: 16px;
+}
+
+.tag {
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    vertical-align: middle;
 }
 
 .meta {

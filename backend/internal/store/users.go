@@ -76,3 +76,6 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= now()`)
 	return tag.RowsAffected(), err
 }
+
+// Pool exposes the connection pool (tests and maintenance only).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }

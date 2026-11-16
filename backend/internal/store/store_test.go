@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -121,7 +122,7 @@ func TestQueueFairnessAndLifecycle(t *testing.T) {
 	}
 
 	// Progress + results
-	if err := s.Heartbeat(ctx, a1.ID, 5); err != nil {
+	if _, err := s.Heartbeat(ctx, a1.ID, 5, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := s.SaveResults(ctx, a1.ID, []store.Post{post("p1"), post("p2")})
@@ -131,7 +132,7 @@ func TestQueueFairnessAndLifecycle(t *testing.T) {
 	if err := s.MarkDone(ctx, a1.ID, "key.xlsx", 2, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Heartbeat(ctx, a1.ID, 6); !errors.Is(err, store.ErrJobState) {
+	if _, err := s.Heartbeat(ctx, a1.ID, 6, nil, nil); !errors.Is(err, store.ErrJobState) {
 		t.Fatalf("heartbeat on done job: want ErrJobState, got %v", err)
 	}
 
@@ -375,5 +376,335 @@ func TestSchedules(t *testing.T) {
 	}
 	if j, err := s.GetJob(ctx, u.ID, job.ID); err != nil || j.ScheduleID != nil {
 		t.Fatalf("job after schedule delete: %+v %v", j, err)
+	}
+}
+
+func TestProjectAnalysisFlow(t *testing.T) {
+	s, pool := setup(t)
+	ctx := context.Background()
+	u := mustUser(t, s, "proj@example.com")
+
+	p, err := s.CreateProject(ctx, u.ID, store.ProjectInput{Name: "Beeline KZ", Market: "Казахстан",
+		Aliases: []string{"билайн", "@beeline_kz"}, OfficialAccounts: []string{"beeline_kz"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountProjects(ctx, u.ID); n != 1 {
+		t.Fatalf("projects = %d", n)
+	}
+
+	job, err := s.CreateProjectJob(ctx, p, "recent", 50, nil)
+	if err != nil || job.ProjectID == nil || strings.Join(job.Keywords, ",") != "билайн,@beeline_kz" {
+		t.Fatalf("project job: %+v %v", job, err)
+	}
+	_, _ = s.ClaimJob(ctx, "w")
+	withCtx := post("c1")
+	withCtx.Context = "1/2 интернет не работает"
+	saved, err := s.SaveResults(ctx, job.ID, []store.Post{post("a1"), post("a2"), withCtx})
+	if err != nil || len(saved) != 3 {
+		t.Fatalf("save: %v", err)
+	}
+	// Project progress: alias 2 of 2, value may go down (dedup); plain heartbeat keeps the max
+	one, two, ten := 1, 2, 10
+	_, _ = s.Heartbeat(ctx, job.ID, 361, &one, &ten)
+	_, _ = s.Heartbeat(ctx, job.ID, 313, &two, &ten)
+	if g, _ := s.GetJobByID(ctx, job.ID); g.PostsSeen != 313 || g.ProgressKeywordIndex == nil || *g.ProgressKeywordIndex != 2 {
+		t.Fatalf("project progress: seen %d idx %v", g.PostsSeen, g.ProgressKeywordIndex)
+	}
+	_, _ = s.Heartbeat(ctx, job.ID, 100, nil, nil)
+	if g, _ := s.GetJobByID(ctx, job.ID); g.PostsSeen != 313 {
+		t.Fatalf("plain heartbeat must not lower progress: %d", g.PostsSeen)
+	}
+	if err := s.MarkScraped(ctx, job.ID, 3, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	// Analyzer picks it up
+	claimed, err := s.ClaimAnalysis(ctx)
+	if err != nil || claimed.ID != job.ID || *claimed.AnalysisStatus != store.AnalysisRunning {
+		t.Fatalf("claim analysis: %+v %v", claimed, err)
+	}
+	if _, err := s.ClaimAnalysis(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second claim must find nothing, got %v", err)
+	}
+	todo, _ := s.PostsToLabel(ctx, job.ID, p.ID, "v1")
+	if len(todo) != 3 {
+		t.Fatalf("to label: %d", len(todo))
+	}
+	for _, tp := range todo {
+		if tp.ID == "c1" && tp.Context != "1/2 интернет не работает" {
+			t.Errorf("context not stored: %q", tp.Context)
+		}
+	}
+	_ = s.SaveLabel(ctx, p.ID, "a1", store.PostLabel{Category: "review", Market: "target", Sentiment: "negative", Aspects: []string{"mobile_internet"}, Language: "ru", Reason: "r"}, "m", "v1")
+	_ = s.SaveLabel(ctx, p.ID, "a2", store.PostLabel{Category: "review", Market: "target", Sentiment: "positive", Language: "kk", Reason: "r"}, "m", "v1")
+	_ = s.SaveLabel(ctx, p.ID, "c1", store.PostLabel{Category: "ad", Market: "target", Sentiment: "neutral", Language: "ru", Reason: "r", Excluded: true}, "m", "v1")
+	if todo, _ := s.PostsToLabel(ctx, job.ID, p.ID, "v1"); len(todo) != 0 {
+		t.Fatalf("all labeled, still %d to do", len(todo))
+	}
+	if todo, _ := s.PostsToLabel(ctx, job.ID, p.ID, "v2"); len(todo) != 3 {
+		t.Fatalf("new prompt version must relabel, got %d", len(todo))
+	}
+
+	if err := s.FinishAnalysis(ctx, job.ID, "k.xlsx", "r.xlsx"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetJob(ctx, u.ID, job.ID)
+	if got.AnalyzedCount != 3 || *got.AnalysisStatus != store.AnalysisDone || got.RemovedFileKey == nil {
+		t.Fatalf("job after analysis: %+v", got)
+	}
+
+	sum, err := s.JobSummary(ctx, job.ID)
+	if err != nil || sum.Total != 3 || sum.Kept != 2 || sum.Sentiment["negative"] != 1 || sum.Sentiment["positive"] != 1 ||
+		sum.Excluded["ad"] != 1 || sum.Aspects["mobile_internet"]["negative"] != 1 {
+		t.Fatalf("summary: %+v %v", sum, err)
+	}
+
+	list := func(q store.PostQuery) []string {
+		q.Limit = 50
+		ps, _, err := s.ListJobPosts(ctx, job.ID, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{}
+		for _, p := range ps {
+			ids = append(ids, p.ID)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+	if ids := list(store.PostQuery{View: "kept"}); strings.Join(ids, ",") != "a1,a2" {
+		t.Errorf("kept: %v", ids)
+	}
+	if ids := list(store.PostQuery{View: "removed"}); strings.Join(ids, ",") != "c1" {
+		t.Errorf("removed: %v", ids)
+	}
+	if ids := list(store.PostQuery{View: "kept", Sentiment: "negative"}); strings.Join(ids, ",") != "a1" {
+		t.Errorf("negative: %v", ids)
+	}
+	if ids := list(store.PostQuery{View: "all", Aspect: "mobile_internet"}); strings.Join(ids, ",") != "a1" {
+		t.Errorf("aspect: %v", ids)
+	}
+
+	// The next run reuses existing labels: only the new post needs the classifier
+	job2, _ := s.CreateProjectJob(ctx, p, "recent", 50, nil)
+	_, _ = s.ClaimJob(ctx, "w")
+	_, _ = s.SaveResults(ctx, job2.ID, []store.Post{post("a1"), post("n1")})
+	if todo, _ := s.PostsToLabel(ctx, job2.ID, p.ID, "v1"); len(todo) != 1 || todo[0].ID != "n1" {
+		t.Fatalf("second run to label: %+v", todo)
+	}
+
+	// Comments: a1 is negative but has no replies on Threads -> give it some, then queue collection
+	if _, err := pool.Exec(ctx, `UPDATE posts SET replies = 5 WHERE id = 'a1'`); err != nil {
+		t.Fatal(err)
+	}
+	urls, err := s.PostsForComments(ctx, job.ID, p.ID, 10)
+	if err != nil || len(urls) != 1 || !strings.HasSuffix(urls[0], "/a1") {
+		t.Fatalf("posts for comments: %v %v", urls, err)
+	}
+	full, _ := s.GetJobByID(ctx, job.ID)
+	cj, err := s.CreateCommentsJob(ctx, full, urls, 30)
+	if err != nil || cj.Kind != store.JobKindComments || cj.ParentJobID == nil || len(cj.PostURLs) != 1 {
+		t.Fatalf("comments job: %+v %v", cj, err)
+	}
+	if n, _ := s.CountActiveJobs(ctx, u.ID); n != 1 { // only job2 (search) counts
+		t.Fatalf("system comments job must not count against quotas, active = %d", n)
+	}
+	if g, _ := s.GetJob(ctx, u.ID, job.ID); g.CommentsState != "queued" {
+		t.Fatalf("comments state: %q", g.CommentsState)
+	}
+	if _, err := s.GetJob(ctx, u.ID, cj.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("comments job must not be visible as a user job: %v", err)
+	}
+	// job2 is still queued ahead of the comments job (fair order: user served least recently)
+	for {
+		c, err := s.ClaimJob(ctx, "w")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.ID == cj.ID {
+			break
+		}
+		_ = s.MarkFailed(ctx, c.ID, "skip")
+	}
+	cm1, cm2 := post("cm1"), post("cm2")
+	cm1.ParentID, cm2.ParentID = "a1", "a1"
+	if _, err := s.SaveResults(ctx, cj.ID, []store.Post{cm1, cm2}); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SaveLabel(ctx, p.ID, "cm1", store.PostLabel{Category: "review", Market: "target", Sentiment: "negative", Language: "ru", Reason: "r"}, "m", "v1")
+	_ = s.SaveLabel(ctx, p.ID, "cm2", store.PostLabel{Category: "review", Market: "target", Sentiment: "positive", Language: "ru", Reason: "r"}, "m", "v1")
+	comments, err := s.ListComments(ctx, &p.ID, "a1", 50)
+	if err != nil || len(comments) != 2 || comments[0].Label == nil {
+		t.Fatalf("list comments: %+v %v", comments, err)
+	}
+	ps, _, _ := s.ListJobPosts(ctx, job.ID, store.PostQuery{View: "all", PostID: "a1", Limit: 5})
+	if len(ps) != 1 || ps[0].Comments["total"] != 2 || ps[0].Comments["negative"] != 1 || ps[0].Comments["positive"] != 1 {
+		t.Fatalf("comment counts: %+v", ps)
+	}
+	if sum, _ := s.JobSummary(ctx, job.ID); sum.Comments["negative"] != 1 || sum.Comments["positive"] != 1 {
+		t.Fatalf("summary comments: %+v", sum.Comments)
+	}
+	jc, err := s.JobComments(ctx, job.ID)
+	if err != nil || len(jc) != 2 || jc[0].Parent == nil || !strings.HasSuffix(jc[0].Parent.URL, "/a1") || jc[0].Label == nil {
+		t.Fatalf("job comments: %+v %v", jc, err)
+	}
+	if err := s.SetJobFiles(ctx, job.ID, "new.xlsx", ""); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetJob(ctx, u.ID, job.ID); *g.FileKey != "new.xlsx" || g.RemovedFileKey != nil {
+		t.Fatalf("files not replaced: %+v", g)
+	}
+	if urls, _ := s.PostsForComments(ctx, job.ID, p.ID, 10); len(urls) != 0 {
+		t.Fatalf("comments already collected, still queued: %v", urls)
+	}
+
+	// Deleting the project keeps the runs as history
+	if err := s.DeleteProject(ctx, u.ID, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := s.GetJob(ctx, u.ID, job.ID); err != nil || j.ProjectID != nil {
+		t.Fatalf("job after project delete: %+v %v", j, err)
+	}
+}
+
+func TestProjectSchedule(t *testing.T) {
+	s, _ := setup(t)
+	ctx := context.Background()
+	u := mustUser(t, s, "psched@example.com")
+	p, _ := s.CreateProject(ctx, u.ID, store.ProjectInput{Name: "Beeline KZ", Market: "Казахстан", Aliases: []string{"билайн", "@beeline_kz"}})
+	t0 := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+
+	sc, err := s.CreateSchedule(ctx, u.ID, store.ScheduleInput{ProjectID: &p.ID, Keyword: p.Name, Filter: "recent", MaxItems: 30, Enabled: true,
+		Spec: schedule.Spec{Kind: schedule.KindEveryHours, EveryHours: 24, Timezone: "UTC"}}, t0)
+	if err != nil || sc.ProjectID == nil || *sc.ProjectName != "Beeline KZ" || len(sc.ProjectAliases) != 2 {
+		t.Fatalf("project schedule: %+v %v", sc, err)
+	}
+	// Aliases edited after the schedule was created are picked up at run time
+	_, _ = s.UpdateProject(ctx, u.ID, p.ID, store.ProjectInput{Name: "Beeline KZ", Market: "Казахстан", Aliases: []string{"билайн", "@beeline_kz", "beeline"}})
+
+	res, err := s.RunDueSchedules(ctx, t0, store.ScheduleLimits{ActiveJobs: 3, DailyJobs: 20})
+	if err != nil || res.Started != 1 {
+		t.Fatalf("run: %+v %v", res, err)
+	}
+	sc, _ = s.GetSchedule(ctx, u.ID, sc.ID)
+	job, _ := s.GetJob(ctx, u.ID, *sc.LastJobID)
+	if job.ProjectID == nil || *job.ProjectID != p.ID || len(job.Keywords) != 3 || job.ScheduleID == nil || job.Keyword != "Beeline KZ" {
+		t.Fatalf("scheduled project job: %+v", job)
+	}
+	// A manual run and a scheduled run of the same project share new-post tracking
+	manual, _ := s.CreateProjectJob(ctx, p, "recent", 30, nil)
+	var a, b string
+	_ = s.Pool().QueryRow(ctx, `SELECT keyword_norm FROM jobs WHERE id = $1`, job.ID).Scan(&a)
+	_ = s.Pool().QueryRow(ctx, `SELECT keyword_norm FROM jobs WHERE id = $1`, manual.ID).Scan(&b)
+	if a != b {
+		t.Fatalf("keyword_norm differs: %q vs %q", a, b)
+	}
+
+	// Deleting the project deletes its schedules
+	_ = s.DeleteProject(ctx, u.ID, p.ID)
+	if _, err := s.GetSchedule(ctx, u.ID, sc.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("schedule must be deleted with its project: %v", err)
+	}
+}
+
+func TestStopJob(t *testing.T) {
+	s, _ := setup(t)
+	ctx := context.Background()
+	u := mustUser(t, s, "stop@example.com")
+	other := mustUser(t, s, "stop-other@example.com")
+
+	j, _ := s.CreateJob(ctx, u.ID, "билайн", "recent", 300)
+	if err := s.RequestStop(ctx, u.ID, j.ID); !errors.Is(err, store.ErrJobState) {
+		t.Fatalf("queued job: want ErrJobState (use cancel), got %v", err)
+	}
+	_, _ = s.ClaimJob(ctx, "w")
+	if stop, err := s.Heartbeat(ctx, j.ID, 10, nil, nil); err != nil || stop {
+		t.Fatalf("no stop yet: %v %v", stop, err)
+	}
+	if err := s.RequestStop(ctx, other.ID, j.ID); !errors.Is(err, store.ErrJobState) {
+		t.Fatalf("another user must not stop the job: %v", err)
+	}
+	if err := s.RequestStop(ctx, u.ID, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if stop, _ := s.Heartbeat(ctx, j.ID, 20, nil, nil); !stop {
+		t.Fatal("worker must see the stop request")
+	}
+	// The worker sends what it has: the job completes normally
+	if _, err := s.SaveResults(ctx, j.ID, []store.Post{post("s1")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDone(ctx, j.ID, "k", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetJob(ctx, u.ID, j.ID); g.Status != store.JobDone || !g.StopRequested {
+		t.Fatalf("stopped job: %+v", g)
+	}
+
+	// After scraping, stop applies to the comments collection
+	full, _ := s.GetJobByID(ctx, j.ID)
+	cj, _ := s.CreateCommentsJob(ctx, full, []string{"https://www.threads.com/@a/post/s1"}, 30)
+	if err := s.RequestStop(ctx, u.ID, j.ID); err != nil {
+		t.Fatalf("stop queued comments: %v", err)
+	}
+	if c, _ := s.GetJobByID(ctx, cj.ID); c.Status != store.JobCanceled {
+		t.Fatalf("queued comments job must be canceled: %s", c.Status)
+	}
+	if g, _ := s.GetJob(ctx, u.ID, j.ID); g.CommentsState != "canceled" {
+		t.Fatalf("comments state: %q", g.CommentsState)
+	}
+	if err := s.RequestStop(ctx, u.ID, j.ID); !errors.Is(err, store.ErrJobState) {
+		t.Fatalf("nothing left to stop: %v", err)
+	}
+}
+
+func TestDeleteJob(t *testing.T) {
+	s, _ := setup(t)
+	ctx := context.Background()
+	u := mustUser(t, s, "del@example.com")
+	other := mustUser(t, s, "del-other@example.com")
+
+	// Finished job: deleted at once, file keys returned, comments job cascades
+	done, _ := s.CreateJob(ctx, u.ID, "done", "recent", 10)
+	_, _ = s.ClaimJob(ctx, "w")
+	_, _ = s.SaveResults(ctx, done.ID, []store.Post{post("d1")})
+	_ = s.MarkDone(ctx, done.ID, "users/1/jobs/1/posts.xlsx", 1, 1)
+	full, _ := s.GetJobByID(ctx, done.ID)
+	cj, _ := s.CreateCommentsJob(ctx, full, []string{"https://www.threads.com/@a/post/d1"}, 10)
+	if _, err := s.DeleteJob(ctx, other.ID, done.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign delete: %v", err)
+	}
+	keys, err := s.DeleteJob(ctx, u.ID, done.ID)
+	if err != nil || len(keys) != 1 || keys[0] != "users/1/jobs/1/posts.xlsx" {
+		t.Fatalf("delete done: %v %v", keys, err)
+	}
+	if _, err := s.GetJobByID(ctx, cj.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("comments job must be deleted with its run: %v", err)
+	}
+
+	// Running job: hidden at once, worker told to stop, results discarded on complete
+	run, _ := s.CreateJob(ctx, u.ID, "run", "recent", 10)
+	_, _ = s.ClaimJob(ctx, "w")
+	if keys, err := s.DeleteJob(ctx, u.ID, run.ID); err != nil || keys != nil {
+		t.Fatalf("delete running: %v %v", keys, err)
+	}
+	if _, err := s.GetJob(ctx, u.ID, run.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted running job must be hidden: %v", err)
+	}
+	if jobs, _ := s.ListJobs(ctx, u.ID, 10); len(jobs) != 0 {
+		t.Fatalf("list must hide deleted jobs: %d", len(jobs))
+	}
+	if n, _ := s.CountActiveJobs(ctx, u.ID); n != 0 {
+		t.Fatalf("deleted job must not count as active: %d", n)
+	}
+	if stop, err := s.Heartbeat(ctx, run.ID, 5, nil, nil); err != nil || !stop {
+		t.Fatalf("worker must be asked to stop: %v %v", stop, err)
+	}
+	if dropped, err := s.DropIfDeleted(ctx, run.ID); err != nil || !dropped {
+		t.Fatalf("drop: %v %v", dropped, err)
+	}
+	if dropped, _ := s.DropIfDeleted(ctx, run.ID); dropped {
+		t.Fatal("second drop must be a no-op")
 	}
 }

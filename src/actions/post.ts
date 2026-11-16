@@ -28,7 +28,7 @@ import {
  * Execute post action
  */
 export async function postAction(input: PostInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
-    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
+    const { pushItem, createProxyConfiguration, onProgress, shouldStop } = resolveHooks(hooks);
     const { postUrl, proxyConfiguration: proxyConfig, maxItems, useCookies = false, storageState, rateLimitConfig = {} } = input;
     const maxReplies = maxItems ?? 50;
 
@@ -216,7 +216,7 @@ export async function postAction(input: PostInput, log: Log, hooks: ActionHooks 
 
             // Fetch replies on the page (treat as posts with source=reply)
             try {
-                const replies = (await scrollForPosts(page, maxReplies, log, { ...input, onProgress }))
+                const replies = (await scrollForPosts(page, maxReplies, log, { ...input, onProgress, shouldStop }))
                     .filter((reply) => reply.id !== postData.id)
                     .slice(0, maxReplies);
                 for (const reply of replies) {

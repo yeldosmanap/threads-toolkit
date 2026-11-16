@@ -25,7 +25,7 @@ import {
  * Execute search action
  */
 export async function searchAction(input: SearchInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
-    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
+    const { pushItem, createProxyConfiguration, onProgress, shouldStop } = resolveHooks(hooks);
     const {
         keyword,
         filter = 'recent',
@@ -212,7 +212,7 @@ export async function searchAction(input: SearchInput, log: Log, hooks: ActionHo
             }
 
             // Scroll to load more posts
-            const posts = await scrollForPosts(page, maxItems, log, { ...input, onProgress });
+            const posts = await scrollForPosts(page, maxItems, log, { ...input, onProgress, shouldStop });
 
             // Extract posts using centralized parser
             log.info('Extracted posts from page', { count: posts.length });

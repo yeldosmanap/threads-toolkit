@@ -24,3 +24,4 @@ deploy
 exports
 *.xlsx
 .env
+eval-out

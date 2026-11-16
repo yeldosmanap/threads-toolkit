@@ -25,26 +25,35 @@ type Schedule struct {
 	CreatedAt time.Time
 	// Status of the last created job (joined), nil if none
 	LastJobStatus *string
+	// Project schedules run the whole project (all aliases + analysis); nil = keyword search
+	ProjectID      *int64
+	ProjectName    *string
+	ProjectAliases []string
 }
 
 type ScheduleInput struct {
-	Keyword  string
-	Filter   string
-	MaxItems int
-	Spec     schedule.Spec
-	Enabled  bool
+	// Set for project schedules (Keyword is then the project name, for display)
+	ProjectID *int64
+	Keyword   string
+	Filter    string
+	MaxItems  int
+	Spec      schedule.Spec
+	Enabled   bool
 }
 
 const scheduleColumns = `s.id, s.user_id, s.keyword, s.filter, s.max_items, s.kind,
 	coalesce(s.every_hours, 0), coalesce(s.daily_time, ''), s.timezone, s.enabled,
 	s.next_run_at, s.last_run_at, s.last_error, s.last_job_id, s.created_at,
-	(SELECT j.status FROM jobs j WHERE j.id = s.last_job_id)`
+	(SELECT j.status FROM jobs j WHERE j.id = s.last_job_id),
+	s.project_id, (SELECT p.name FROM projects p WHERE p.id = s.project_id),
+	(SELECT p.aliases FROM projects p WHERE p.id = s.project_id)`
 
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var s Schedule
 	err := row.Scan(&s.ID, &s.UserID, &s.Keyword, &s.Filter, &s.MaxItems, &s.Spec.Kind,
 		&s.Spec.EveryHours, &s.Spec.DailyTime, &s.Spec.Timezone, &s.Enabled,
-		&s.NextRunAt, &s.LastRunAt, &s.LastError, &s.LastJobID, &s.CreatedAt, &s.LastJobStatus)
+		&s.NextRunAt, &s.LastRunAt, &s.LastError, &s.LastJobID, &s.CreatedAt, &s.LastJobStatus,
+		&s.ProjectID, &s.ProjectName, &s.ProjectAliases)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, ErrNotFound
 	}
@@ -75,11 +84,11 @@ func (s *Store) CreateSchedule(ctx context.Context, userID int64, in ScheduleInp
 	sp := in.Spec
 	return scanSchedule(s.pool.QueryRow(ctx,
 		`INSERT INTO schedules AS s (user_id, keyword, keyword_norm, filter, max_items, kind, every_hours,
-			daily_time, timezone, enabled, next_run_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			daily_time, timezone, enabled, next_run_at, project_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING `+scheduleColumns,
 		userID, in.Keyword, NormalizeKeyword(in.Keyword), in.Filter, in.MaxItems, sp.Kind,
-		nullIfZero(sp.EveryHours), nullIfEmpty(sp.DailyTime), sp.Timezone, in.Enabled, sp.First(now)))
+		nullIfZero(sp.EveryHours), nullIfEmpty(sp.DailyTime), sp.Timezone, in.Enabled, sp.First(now), in.ProjectID))
 }
 
 func (s *Store) ListSchedules(ctx context.Context, userID int64) ([]Schedule, error) {
@@ -125,11 +134,12 @@ func (s *Store) UpdateSchedule(ctx context.Context, userID, id int64, in Schedul
 	return scanSchedule(s.pool.QueryRow(ctx,
 		`UPDATE schedules s SET keyword = $3, keyword_norm = $4, filter = $5, max_items = $6, kind = $7,
 			every_hours = $8, daily_time = $9, timezone = $10, enabled = $11, next_run_at = $12,
-			last_error = CASE WHEN $11 AND NOT s.enabled THEN NULL ELSE s.last_error END
+			last_error = CASE WHEN $11 AND NOT s.enabled THEN NULL ELSE s.last_error END,
+			project_id = $13
 		 WHERE s.id = $1 AND s.user_id = $2
 		 RETURNING `+scheduleColumns,
 		id, userID, in.Keyword, NormalizeKeyword(in.Keyword), in.Filter, in.MaxItems, sp.Kind,
-		nullIfZero(sp.EveryHours), nullIfEmpty(sp.DailyTime), sp.Timezone, in.Enabled, next))
+		nullIfZero(sp.EveryHours), nullIfEmpty(sp.DailyTime), sp.Timezone, in.Enabled, next, in.ProjectID))
 }
 
 func (s *Store) DeleteSchedule(ctx context.Context, userID, id int64) error {
@@ -209,10 +219,21 @@ func (s *Store) RunDueSchedules(ctx context.Context, now time.Time, limits Sched
 		var jobID *int64
 		if skip == "" {
 			var id int64
-			if err := tx.QueryRow(ctx,
-				`INSERT INTO jobs (user_id, keyword, keyword_norm, filter, max_items, schedule_id)
-				 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-				sc.UserID, sc.Keyword, NormalizeKeyword(sc.Keyword), sc.Filter, sc.MaxItems, sc.ID).Scan(&id); err != nil {
+			var err error
+			if sc.ProjectID != nil {
+				// Whole project: every alias is searched, then the analyzer takes over
+				err = tx.QueryRow(ctx,
+					`INSERT INTO jobs (user_id, keyword, keyword_norm, filter, max_items, schedule_id, project_id, keywords)
+					 SELECT $1, p.name, $2, $3, $4, $5, p.id, p.aliases FROM projects p WHERE p.id = $6
+					 RETURNING id`,
+					sc.UserID, ProjectKeywordNorm(*sc.ProjectID), sc.Filter, sc.MaxItems, sc.ID, *sc.ProjectID).Scan(&id)
+			} else {
+				err = tx.QueryRow(ctx,
+					`INSERT INTO jobs (user_id, keyword, keyword_norm, filter, max_items, schedule_id)
+					 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+					sc.UserID, sc.Keyword, NormalizeKeyword(sc.Keyword), sc.Filter, sc.MaxItems, sc.ID).Scan(&id)
+			}
+			if err != nil {
 				return res, err
 			}
 			jobID = &id

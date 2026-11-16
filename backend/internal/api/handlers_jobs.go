@@ -18,22 +18,32 @@ import (
 )
 
 type jobResponse struct {
-	ID            int64      `json:"id"`
-	Keyword       string     `json:"keyword"`
-	Filter        string     `json:"filter"`
-	MaxItems      int        `json:"maxItems"`
-	Status        string     `json:"status"`
-	PostsSeen     int        `json:"postsSeen"`
-	PostsCount    *int       `json:"postsCount"`
-	NewPostsCount *int       `json:"newPostsCount"`
-	Error         *string    `json:"error"`
-	HasFile       bool       `json:"hasFile"`
-	QueuePosition *int       `json:"queuePosition"`
-	IsFirstRun    bool       `json:"isFirstRun"`
-	ScheduleID    *int64     `json:"scheduleId"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	StartedAt     *time.Time `json:"startedAt"`
-	FinishedAt    *time.Time `json:"finishedAt"`
+	ID                   int64      `json:"id"`
+	Keyword              string     `json:"keyword"`
+	Filter               string     `json:"filter"`
+	MaxItems             int        `json:"maxItems"`
+	Status               string     `json:"status"`
+	PostsSeen            int        `json:"postsSeen"`
+	PostsCount           *int       `json:"postsCount"`
+	NewPostsCount        *int       `json:"newPostsCount"`
+	Error                *string    `json:"error"`
+	HasFile              bool       `json:"hasFile"`
+	QueuePosition        *int       `json:"queuePosition"`
+	IsFirstRun           bool       `json:"isFirstRun"`
+	ScheduleID           *int64     `json:"scheduleId"`
+	ProjectID            *int64     `json:"projectId"`
+	Keywords             []string   `json:"keywords"`
+	AnalysisStatus       *string    `json:"analysisStatus"`
+	AnalysisError        *string    `json:"analysisError"`
+	AnalyzedCount        int        `json:"analyzedCount"`
+	HasRemovedFile       bool       `json:"hasRemovedFile"`
+	CommentsState        string     `json:"commentsState"`
+	ProgressKeywordIndex *int       `json:"progressKeywordIndex"`
+	ProgressAliasSeen    *int       `json:"progressAliasSeen"`
+	StopRequested        bool       `json:"stopRequested"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	StartedAt            *time.Time `json:"startedAt"`
+	FinishedAt           *time.Time `json:"finishedAt"`
 }
 
 func toJobResponse(j store.Job) jobResponse {
@@ -41,6 +51,9 @@ func toJobResponse(j store.Job) jobResponse {
 		ID: j.ID, Keyword: j.Keyword, Filter: j.Filter, MaxItems: j.MaxItems, Status: j.Status,
 		PostsSeen: j.PostsSeen, PostsCount: j.PostsCount, NewPostsCount: j.NewPostsCount, Error: j.Error,
 		HasFile: j.FileKey != nil, QueuePosition: j.QueuePosition, IsFirstRun: j.IsFirstRun, ScheduleID: j.ScheduleID,
+		ProjectID: j.ProjectID, Keywords: j.Keywords, AnalysisStatus: j.AnalysisStatus, AnalysisError: j.AnalysisError,
+		AnalyzedCount: j.AnalyzedCount, HasRemovedFile: j.RemovedFileKey != nil, CommentsState: j.CommentsState,
+		ProgressKeywordIndex: j.ProgressKeywordIndex, ProgressAliasSeen: j.ProgressAliasSeen, StopRequested: j.StopRequested,
 		CreatedAt: j.CreatedAt, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
 	}
 }
@@ -115,26 +128,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Quotas: one Threads account serves every user, so each user gets a fair share.
-	// (Check-then-insert can race by one job under concurrent requests - acceptable for a soft limit.)
-	active, err := s.store.CountActiveJobs(r.Context(), u.ID)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	if active >= s.cfg.QuotaActiveJobs {
-		writeError(w, http.StatusTooManyRequests, "quota_active",
-			fmt.Sprintf("У вас уже %d поисков в очереди или в работе — дождитесь их завершения", active))
-		return
-	}
-	daily, err := s.store.CountJobsSince(r.Context(), u.ID, time.Now().Add(-24*time.Hour))
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	if daily >= s.cfg.QuotaDailyJobs {
-		writeError(w, http.StatusTooManyRequests, "quota_daily",
-			fmt.Sprintf("Достигнут лимит: %d поисков за 24 часа", s.cfg.QuotaDailyJobs))
+	if msg, status := s.checkJobQuotas(r, u.ID); msg != "" {
+		writeError(w, status, "quota", msg)
 		return
 	}
 
@@ -149,6 +144,29 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		job = full
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"job": toJobResponse(job)})
+}
+
+// checkJobQuotas: one Threads account serves every user, so each user gets a fair share.
+// Returns a user-facing message and status, or "" when the user may start another job.
+// (Check-then-insert can race by one job under concurrent requests - acceptable for a soft limit.)
+func (s *Server) checkJobQuotas(r *http.Request, userID int64) (string, int) {
+	active, err := s.store.CountActiveJobs(r.Context(), userID)
+	if err != nil {
+		s.log.Error("count active jobs", "err", err)
+		return "Внутренняя ошибка сервера", http.StatusInternalServerError
+	}
+	if active >= s.cfg.QuotaActiveJobs {
+		return fmt.Sprintf("У вас уже %d поисков в очереди или в работе — дождитесь их завершения", active), http.StatusTooManyRequests
+	}
+	daily, err := s.store.CountJobsSince(r.Context(), userID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		s.log.Error("count daily jobs", "err", err)
+		return "Внутренняя ошибка сервера", http.StatusInternalServerError
+	}
+	if daily >= s.cfg.QuotaDailyJobs {
+		return fmt.Sprintf("Достигнут лимит: %d поисков за 24 часа", s.cfg.QuotaDailyJobs), http.StatusTooManyRequests
+	}
+	return "", 0
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
@@ -206,16 +224,74 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDownload streams the xlsx from the private bucket after the ownership check in jobFromURL.
+// handleStopJob finishes a running search early (the collected posts are analyzed as usual),
+// or stops the comments collection of a finished project run.
+func (s *Server) handleStopJob(w http.ResponseWriter, r *http.Request) {
+	j, ok := s.jobFromURL(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.RequestStop(r.Context(), j.UserID, j.ID)
+	if errors.Is(err, store.ErrJobState) {
+		writeError(w, http.StatusConflict, "not_stoppable", "Сейчас нечего останавливать: поиск ещё в очереди или уже завершён")
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	s.log.Info("stop requested", "job", j.ID, "user", j.UserID)
+	if full, err := s.store.GetJob(r.Context(), j.UserID, j.ID); err == nil {
+		j = full
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"job": toJobResponse(j)})
+}
+
+// handleDeleteJob deletes a search from the history (a running one is stopped and discarded).
+func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
+	j, ok := s.jobFromURL(w, r)
+	if !ok {
+		return
+	}
+	if err := s.deleteJob(r, j.UserID, j.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "Поиск не найден")
+			return
+		}
+		s.internalError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteJob(r *http.Request, userID, jobID int64) error {
+	keys, err := s.store.DeleteJob(r.Context(), userID, jobID)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if err := s.files.Delete(r.Context(), k); err != nil {
+			s.log.Warn("delete export file", "job", jobID, "key", k, "err", err)
+		}
+	}
+	s.log.Info("job deleted", "job", jobID, "user", userID, "files", len(keys))
+	return nil
+}
+
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	j, ok := s.jobFromURL(w, r)
 	if !ok {
 		return
 	}
-	if j.FileKey == nil {
+	key, filename := j.FileKey, exportFilename(j)
+	if r.URL.Query().Get("file") == "removed" {
+		key, filename = j.RemovedFileKey, removedFilename(j)
+	}
+	if key == nil {
 		writeError(w, http.StatusNotFound, "no_file", "Файл ещё не готов")
 		return
 	}
-	body, size, err := s.files.Get(r.Context(), *j.FileKey)
+	body, size, err := s.files.Get(r.Context(), *key)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -223,7 +299,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	defer body.Close()
 
 	w.Header().Set("Content-Type", xlsxContentType)
-	w.Header().Set("Content-Disposition", contentDisposition(exportFilename(j)))
+	w.Header().Set("Content-Disposition", contentDisposition(filename))
 	w.Header().Set("Cache-Control", "private, no-store")
 	if size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
@@ -246,6 +322,24 @@ func contentDisposition(filename string) string {
 		}
 	}
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, string(ascii), url.PathEscape(filename))
+}
+
+// removedFilename: the «Удаленные_посты» export of an analyzed project run
+func removedFilename(j store.Job) string {
+	return strings.TrimSuffix(exportFilename(j), ".xlsx") + "-Удаленные_посты.xlsx"
+}
+
+func (s *Server) handleJobSummary(w http.ResponseWriter, r *http.Request) {
+	j, ok := s.jobFromURL(w, r)
+	if !ok {
+		return
+	}
+	sum, err := s.store.JobSummary(r.Context(), j.ID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"summary": sum})
 }
 
 var unsafeFilename = regexp.MustCompile(`[^\p{L}\p{N}_-]+`)
