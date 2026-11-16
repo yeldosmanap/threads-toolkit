@@ -4,11 +4,10 @@
  * Uses centralized parsing from parser.ts for consistency.
  */
 
-import { Actor } from 'apify';
 import type { Log } from 'crawlee';
-import { Dataset, PlaywrightCrawler } from 'crawlee';
+import { PlaywrightCrawler } from 'crawlee';
 
-import type { PostInput, ThreadsStorageState } from '../types.js';
+import type { ActionHooks, PostInput, ThreadsStorageState } from '../types.js';
 import {
     blockHeavyResources,
     DEFAULT_RATE_LIMIT_CONFIG,
@@ -18,6 +17,7 @@ import {
     isNotFoundPage,
     openIsolatedQueue,
     requestHandlerTimeoutFor,
+    resolveHooks,
     runSingleRequestCrawl,
     scrollForPosts,
     sleep,
@@ -27,7 +27,8 @@ import {
 /**
  * Execute post action
  */
-export async function postAction(input: PostInput, log: Log): Promise<void> {
+export async function postAction(input: PostInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
+    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
     const { postUrl, proxyConfiguration: proxyConfig, maxItems, useCookies = false, storageState, rateLimitConfig = {} } = input;
     const maxReplies = maxItems ?? 50;
 
@@ -57,7 +58,7 @@ export async function postAction(input: PostInput, log: Log): Promise<void> {
     }
 
     // Create proxy configuration from input
-    const proxyConfiguration = await Actor.createProxyConfiguration(proxyConfig);
+    const proxyConfiguration = await createProxyConfiguration(proxyConfig);
 
     // Shared set for capturing video URLs across hooks and handler
     const videoRequests = new Set<string>();
@@ -210,17 +211,17 @@ export async function postAction(input: PostInput, log: Log): Promise<void> {
             }
 
             // Push to dataset
-            await Dataset.pushData(postData);
+            await pushItem(postData);
             log.info('Post data saved', { id: postData.id });
 
             // Fetch replies on the page (treat as posts with source=reply)
             try {
-                const replies = (await scrollForPosts(page, maxReplies, log, input))
+                const replies = (await scrollForPosts(page, maxReplies, log, { ...input, onProgress }))
                     .filter((reply) => reply.id !== postData.id)
                     .slice(0, maxReplies);
                 for (const reply of replies) {
                     if (reply.id === postData.id) continue; // skip main post
-                    await Dataset.pushData({ ...reply, source: 'reply', parentId: postData.id });
+                    await pushItem({ ...reply, source: 'reply', parentId: postData.id });
                 }
                 log.info('Replies saved', { count: replies.length, max: maxReplies });
             } catch (err) {

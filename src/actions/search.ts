@@ -2,11 +2,10 @@
  * Search Action - Search posts by keyword
  */
 
-import { Actor } from 'apify';
 import type { Log } from 'crawlee';
-import { Dataset, PlaywrightCrawler } from 'crawlee';
+import { PlaywrightCrawler } from 'crawlee';
 
-import type { SearchInput, ThreadsPost, ThreadsStorageState } from '../types.js';
+import type { ActionHooks, SearchInput, ThreadsPost, ThreadsStorageState } from '../types.js';
 import {
     blockHeavyResources,
     DEFAULT_RATE_LIMIT_CONFIG,
@@ -14,6 +13,7 @@ import {
     openIsolatedQueue,
     RateLimitError,
     requestHandlerTimeoutFor,
+    resolveHooks,
     runSingleRequestCrawl,
     scrollForPosts,
     SELECTORS,
@@ -24,7 +24,8 @@ import {
 /**
  * Execute search action
  */
-export async function searchAction(input: SearchInput, log: Log): Promise<void> {
+export async function searchAction(input: SearchInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
+    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
     const {
         keyword,
         filter = 'recent',
@@ -58,7 +59,7 @@ export async function searchAction(input: SearchInput, log: Log): Promise<void> 
     const threadsVideoRequestsKey = '__threadsVideoRequests';
 
     // Create proxy configuration from input
-    const proxyConfiguration = await Actor.createProxyConfiguration(proxyConfig);
+    const proxyConfiguration = await createProxyConfiguration(proxyConfig);
 
     // Create crawler with search-specific handler
     // Each crawler gets its own queue so batch tasks don't interfere with each other
@@ -211,7 +212,7 @@ export async function searchAction(input: SearchInput, log: Log): Promise<void> 
             }
 
             // Scroll to load more posts
-            const posts = await scrollForPosts(page, maxItems, log, input);
+            const posts = await scrollForPosts(page, maxItems, log, { ...input, onProgress });
 
             // Extract posts using centralized parser
             log.info('Extracted posts from page', { count: posts.length });
@@ -234,7 +235,7 @@ export async function searchAction(input: SearchInput, log: Log): Promise<void> 
                 log.debug('Collected post', { id: post.id, total: collectedPosts.length });
 
                 // Push to dataset immediately, tagged with the query that found it
-                await Dataset.pushData({ ...post, source: 'search', keyword });
+                await pushItem({ ...post, source: 'search', keyword });
             }
 
             const totalSkipped = Object.values(skipReasons).reduce((a, b) => a + b, 0);

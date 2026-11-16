@@ -1,0 +1,22 @@
+# Queue worker for the web service (docker-compose.yml).
+# Separate from ./Dockerfile (the Apify Actor image): the official Playwright image is
+# multi-arch (works on Apple Silicon) and does not depend on the Apify platform.
+# Keep the Playwright version in sync with package.json.
+
+FROM mcr.microsoft.com/playwright:v1.59.1-noble AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+# --ignore-scripts: skip `crawlee install-playwright-browsers`, browsers are preinstalled in the image
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY tsconfig.json ./
+COPY src ./src
+RUN npx tsc
+
+FROM mcr.microsoft.com/playwright:v1.59.1-noble
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
+COPY --from=build /app/dist ./dist
+USER pwuser
+CMD ["node", "dist/worker.js"]

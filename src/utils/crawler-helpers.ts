@@ -8,8 +8,25 @@
  * other's requests.
  */
 
+import { Actor } from 'apify';
 import type { PlaywrightCrawler } from 'crawlee';
-import { RequestQueue } from 'crawlee';
+import { Dataset, RequestQueue } from 'crawlee';
+
+import type { ActionHooks } from '../types.js';
+
+/**
+ * Fill in platform defaults for hooks the caller did not provide.
+ * Defaults are resolved at call time, so tests/smoke runners can still stub
+ * `Dataset.pushData` / `Actor.createProxyConfiguration`.
+ */
+export function resolveHooks(hooks: ActionHooks = {}): Required<ActionHooks> {
+    return {
+        pushItem: hooks.pushItem ?? (async (item) => Dataset.pushData(item as Record<string, unknown>)),
+        createProxyConfiguration:
+            hooks.createProxyConfiguration ?? (async (config) => Actor.createProxyConfiguration(config)),
+        onProgress: hooks.onProgress ?? (() => undefined),
+    };
+}
 
 /**
  * Open a uniquely named request queue for a single crawler run.

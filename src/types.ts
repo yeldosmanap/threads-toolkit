@@ -2,6 +2,7 @@
  * Threads Toolkit - Type definitions
  */
 
+import type { ProxyConfiguration as CrawleeProxyConfiguration } from 'crawlee';
 import type { BrowserContext } from 'playwright';
 
 // =============================================================================
@@ -162,4 +163,17 @@ export interface BatchInput extends ScrollConfig {
     useCookies?: boolean;
     storageState?: Record<string, unknown>;
     rateLimitConfig?: RateLimitConfig;
+}
+
+// =============================================================================
+// Action hooks - let actions run outside the Apify platform (e.g. the queue worker)
+// =============================================================================
+
+export interface ActionHooks {
+    /** Where scraped items go (default: Apify/Crawlee Dataset.pushData) */
+    pushItem?: (item: object) => Promise<void>;
+    /** Proxy factory (default: Actor.createProxyConfiguration) */
+    createProxyConfiguration?: (config?: ProxyConfiguration) => Promise<CrawleeProxyConfiguration | undefined>;
+    /** Called after every scroll step with the number of unique posts parsed so far */
+    onProgress?: (postsSeen: number) => void;
 }

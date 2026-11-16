@@ -4,11 +4,10 @@
  * Uses centralized parsing from parser.ts for consistency.
  */
 
-import { Actor } from 'apify';
 import type { Log } from 'crawlee';
-import { Dataset, PlaywrightCrawler } from 'crawlee';
+import { PlaywrightCrawler } from 'crawlee';
 
-import type { ProfileInput, ThreadsStorageState } from '../types.js';
+import type { ActionHooks, ProfileInput, ThreadsStorageState } from '../types.js';
 import {
     blockHeavyResources,
     DEFAULT_RATE_LIMIT_CONFIG,
@@ -19,6 +18,7 @@ import {
     isNotFoundPage,
     openIsolatedQueue,
     requestHandlerTimeoutFor,
+    resolveHooks,
     runSingleRequestCrawl,
     scrollForPosts,
     sleep,
@@ -29,7 +29,8 @@ import {
 /**
  * Execute profile action
  */
-export async function profileAction(input: ProfileInput, log: Log): Promise<void> {
+export async function profileAction(input: ProfileInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
+    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
     const { username, proxyConfiguration: proxyConfig, maxItems = 20, includePosts = true, useCookies = false, storageState, rateLimitConfig = {} } = input;
 
     // Merge with defaults
@@ -49,7 +50,7 @@ export async function profileAction(input: ProfileInput, log: Log): Promise<void
     const profileUrl = `https://www.threads.com/@${username}`;
 
     // Create proxy configuration from input
-    const proxyConfiguration = await Actor.createProxyConfiguration(proxyConfig);
+    const proxyConfiguration = await createProxyConfiguration(proxyConfig);
 
     // Shared set for capturing video URLs across hooks and handler
     const videoRequests = new Set<string>();
@@ -226,7 +227,7 @@ export async function profileAction(input: ProfileInput, log: Log): Promise<void
             }
 
             // Push profile
-            await Dataset.pushData({ ...profileData, type: 'profile', source: 'profile' });
+            await pushItem({ ...profileData, type: 'profile', source: 'profile' });
             log.info('Profile data saved', { username: profileData.username });
 
             // Also fetch recent posts from profile page
@@ -242,7 +243,7 @@ export async function profileAction(input: ProfileInput, log: Log): Promise<void
                         }, { captured: urls, key: threadsVideoRequestsKey });
                     }
 
-                    const posts = (await scrollForPosts(page, maxItems, log, input)).slice(0, maxItems);
+                    const posts = (await scrollForPosts(page, maxItems, log, { ...input, onProgress })).slice(0, maxItems);
                     let savedCount = 0;
                     for (const post of posts) {
                         const postValidation = validatePost(post);
@@ -250,7 +251,7 @@ export async function profileAction(input: ProfileInput, log: Log): Promise<void
                             log.debug('Skipping invalid profile post', { reason: postValidation.reason, id: post.id });
                             continue;
                         }
-                        await Dataset.pushData({ ...post, source: 'profile_posts', profile: profileData.username });
+                        await pushItem({ ...post, source: 'profile_posts', profile: profileData.username });
                         savedCount++;
                     }
                     log.info('Profile posts saved', { count: savedCount, total: posts.length, max: maxItems });

@@ -5,11 +5,10 @@
  * It reuses the search page parsing logic from the parser module.
  */
 
-import { Actor } from 'apify';
 import type { Log } from 'crawlee';
-import { Dataset, PlaywrightCrawler } from 'crawlee';
+import { PlaywrightCrawler } from 'crawlee';
 
-import type { HashtagInput, ThreadsPost, ThreadsStorageState } from '../types.js';
+import type { ActionHooks, HashtagInput, ThreadsPost, ThreadsStorageState } from '../types.js';
 import {
     blockHeavyResources,
     DEFAULT_RATE_LIMIT_CONFIG,
@@ -17,6 +16,7 @@ import {
     openIsolatedQueue,
     RateLimitError,
     requestHandlerTimeoutFor,
+    resolveHooks,
     runSingleRequestCrawl,
     scrollForPosts,
     SELECTORS,
@@ -27,7 +27,8 @@ import {
 /**
  * Execute hashtag action
  */
-export async function hashtagAction(input: HashtagInput, log: Log): Promise<void> {
+export async function hashtagAction(input: HashtagInput, log: Log, hooks: ActionHooks = {}): Promise<void> {
+    const { pushItem, createProxyConfiguration, onProgress } = resolveHooks(hooks);
     const {
         tag,
         filter = 'recent',
@@ -61,7 +62,7 @@ export async function hashtagAction(input: HashtagInput, log: Log): Promise<void
     const seenIds = new Set<string>();
 
     // Create proxy configuration from input
-    const proxyConfiguration = await Actor.createProxyConfiguration(proxyConfig);
+    const proxyConfiguration = await createProxyConfiguration(proxyConfig);
 
     // Shared set for capturing video URLs across hooks and handler
     const videoRequests = new Set<string>();
@@ -216,7 +217,7 @@ export async function hashtagAction(input: HashtagInput, log: Log): Promise<void
             }
 
             // Scroll to load more posts
-            const posts = await scrollForPosts(page, maxItems, log, input);
+            const posts = await scrollForPosts(page, maxItems, log, { ...input, onProgress });
 
             // Extract posts using centralized parser
             log.info('Extracted posts from page', { count: posts.length });
@@ -239,7 +240,7 @@ export async function hashtagAction(input: HashtagInput, log: Log): Promise<void
                 collectedPosts.push(post);
                 log.debug('Collected post', { id: post.id, total: collectedPosts.length });
 
-                await Dataset.pushData({ ...post, source: 'hashtag', tag: normalizedTag });
+                await pushItem({ ...post, source: 'hashtag', tag: normalizedTag });
             }
 
             const totalSkipped = Object.values(skipReasons).reduce((a, b) => a + b, 0);

@@ -55,3 +55,31 @@ Video URLs are captured from network responses in a pre-navigation listener and 
 - Threads changes its DOM often; prefer fixes in `selectors.ts`/`parser.ts` with fallbacks over action-specific hacks.
 - `.actor/actor.json` → `meta.generatedBy` was deliberately set by the owner (commit `0a615b2`); do not overwrite it despite the instruction in `AGENTS.md`.
 - Never commit `storageState` / cookies or anything under `storage/`.
+
+## Web service (backend/, web/, src/worker.ts)
+
+A multi-user web app around the scraper. `docker compose up --build` starts everything; site at http://localhost:3000.
+
+```
+web (Vue 3 + TS, nginx) --/api--> backend (Go) --> Postgres (users, sessions, jobs = queue, posts)
+                                     |   ^                         ^
+                                     v   | /internal (Bearer WORKER_TOKEN)
+                              S3 (private bucket, xlsx)    worker (src/worker.ts, this repo's scraper image)
+```
+
+- **Worker** (`src/worker.ts`, `npm run worker:dev`) polls `POST /internal/jobs/claim`, runs `searchAction` with `ActionHooks` (collects posts in memory instead of the Apify Dataset), heartbeats `/progress`, then sends all posts to `/complete` (or `/fail`). It runs ONE job at a time on purpose — every job uses the same Threads session (`THREADS_STORAGE_STATE_PATH`, mounted from `./.auth`). Actions must stay platform-agnostic: never call `Actor.*`/`Dataset.*` directly in `src/actions`, go through `resolveHooks()`.
+- **Backend** (`backend/`, Go 1.23, chi + pgx + goose + excelize + aws-sdk-go-v2). Only the backend touches the DB and S3. All SQL lives in `internal/store`; migrations are embedded in `internal/db/migrations` and applied on start.
+  - Queue = `jobs` table: claim uses `FOR UPDATE SKIP LOCKED` with fair ordering (user served least recently first). A maintenance loop requeues `running` jobs without heartbeat for `JOB_STALE_AFTER`, failing them after `JOB_MAX_ATTEMPTS`.
+  - "New posts": `job_posts.is_new` = no earlier job of the same user with the same `keyword_norm` (lower-cased, whitespace-collapsed) found the post. Posts are global rows; stats keep latest values.
+  - On `/complete` the backend builds the xlsx (sheets «Все посты» + «Новые») and uploads it to S3 under an ASCII-only key `users/{uid}/jobs/{jid}/posts.xlsx`. Downloads are streamed through `GET /api/jobs/{id}/download` after an ownership check — the bucket is never exposed and no presigned URLs are used (SeaweedFS rejected AWS SDK v2 presigned signatures).
+  - Auth: email + bcrypt password, opaque session token in an HttpOnly SameSite=Lax cookie (only its SHA-256 is stored). Every non-GET `/api` request must be `Content-Type: application/json` (CSRF guard). Login/register are rate-limited per IP. Per-user quotas: `QUOTA_ACTIVE_JOBS`, `QUOTA_DAILY_JOBS`, `MAX_ITEMS_LIMIT`.
+  - API error shape: `{"error": {"code": "...", "message": "<Russian, user-facing>"}}`.
+- **Web** (`web/`): Vue 3 + vue-router, no UI library, plain CSS with light/dark tokens in `src/styles.css`. `npm run dev` proxies `/api` to `127.0.0.1:8080` (backend port published by compose). Russian UI. Jobs list polls every 3 s while a job is active, 30 s otherwise.
+- **Local S3** is SeaweedFS (`chrislusf/seaweedfs`) — official MinIO images are no longer published. Any S3 works via `S3_*` env.
+- Compose Postgres is published on **127.0.0.1:55432** (5432 is often taken by a local Postgres).
+
+```bash
+cd backend && go test ./...                      # unit tests
+cd backend && TEST_DATABASE_URL='postgres://threads:threads@127.0.0.1:55432/threads_test?sslmode=disable' go test ./...  # + DB integration (wipes threads_test)
+cd web && npm run build                          # vue-tsc typecheck + build
+```

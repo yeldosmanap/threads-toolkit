@@ -204,7 +204,7 @@ export async function scrollForPosts(
     page: Page,
     maxItems: number,
     log: Log,
-    scrollConfig: ScrollConfig = {},
+    scrollConfig: ScrollConfig & { onProgress?: (postsSeen: number) => void } = {},
 ): Promise<ThreadsPost[]> {
     const SCROLL_DELAY = Math.max(0, scrollConfig.scrollDelay ?? DEFAULT_SCROLL_CONFIG.scrollDelay);
     const MAX_NO_NEW_CONTENT = Math.max(1, scrollConfig.maxEmptyScrolls ?? DEFAULT_SCROLL_CONFIG.maxEmptyScrolls);
@@ -310,6 +310,7 @@ export async function scrollForPosts(
         const previousSize = seenPostIds.size;
         currentIds.forEach((id) => seenPostIds.add(id));
         await collectVisiblePosts();
+        scrollConfig.onProgress?.(collected.size);
 
         if (seenPostIds.size === previousSize) {
             noNewContentCount++;
