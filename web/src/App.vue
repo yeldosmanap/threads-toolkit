@@ -16,8 +16,12 @@ async function onLogout(): Promise<void> {
         <div class="container topbar-inner">
             <RouterLink to="/" class="brand">
                 <img src="/favicon.svg" alt="" width="24" height="24" />
-                Threads Toolkit
+                <span class="brand-text">Threads Toolkit</span>
             </RouterLink>
+            <nav v-if="currentUser" class="nav">
+                <RouterLink to="/" exact-active-class="active">Поиски</RouterLink>
+                <RouterLink to="/schedules" active-class="active">Регулярные</RouterLink>
+            </nav>
             <div v-if="currentUser" class="user">
                 <span class="muted email">{{ currentUser.email }}</span>
                 <button class="btn secondary small" @click="onLogout">Выйти</button>
@@ -52,6 +56,31 @@ async function onLogout(): Promise<void> {
     text-decoration: none;
 }
 
+.nav {
+    display: flex;
+    gap: 4px;
+    margin-right: auto;
+    margin-left: 16px;
+}
+
+.nav a {
+    padding: 6px 10px;
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.nav a:hover {
+    background: var(--surface-2);
+}
+
+.nav a.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
 .user {
     display: flex;
     align-items: center;
@@ -72,8 +101,23 @@ async function onLogout(): Promise<void> {
 }
 
 @media (max-width: 520px) {
-    .email {
+    .email,
+    .brand-text {
         display: none;
+    }
+
+    .nav {
+        margin-left: 4px;
+    }
+}
+
+@media (max-width: 360px) {
+    .topbar-inner {
+        gap: 6px;
+    }
+
+    .nav a {
+        padding: 6px 7px;
     }
 }
 </style>

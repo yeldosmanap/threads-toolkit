@@ -67,3 +67,28 @@ func TestScrollBudget(t *testing.T) {
 		t.Errorf("budget must be capped at 1800, got %d", got)
 	}
 }
+
+func TestScheduleInput(t *testing.T) {
+	s := &Server{cfg: config.Config{MaxItemsLimit: 500, DefaultMaxItems: 100, MinScheduleHours: 6}}
+
+	in, msg := s.scheduleInput(scheduleRequest{Keyword: " билайн ", Kind: "every_hours", EveryHours: 12, DailyTime: "09:00"})
+	if msg != "" || in.Keyword != "билайн" || in.MaxItems != 100 || !in.Enabled || in.Spec.DailyTime != "" || in.Spec.Timezone != "UTC" {
+		t.Fatalf("every_hours: %+v %q", in, msg)
+	}
+	off := false
+	in, msg = s.scheduleInput(scheduleRequest{Keyword: "kcell", Kind: "daily", DailyTime: "21:15", EveryHours: 6, Timezone: "Asia/Almaty", Enabled: &off})
+	if msg != "" || in.Enabled || in.Spec.EveryHours != 0 || in.Spec.DailyTime != "21:15" {
+		t.Fatalf("daily: %+v %q", in, msg)
+	}
+	for _, bad := range []scheduleRequest{
+		{Keyword: "x", Kind: "every_hours", EveryHours: 1},
+		{Keyword: "x", Kind: "daily", DailyTime: "25:00"},
+		{Keyword: "x", Kind: "weekly"},
+		{Keyword: "", Kind: "every_hours", EveryHours: 6},
+		{Keyword: "x", Kind: "every_hours", EveryHours: 6, MaxItems: 10000},
+	} {
+		if _, msg := s.scheduleInput(bad); msg == "" {
+			t.Errorf("expected error for %+v", bad)
+		}
+	}
+}

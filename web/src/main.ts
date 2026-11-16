@@ -6,12 +6,16 @@ import { createRouter, createWebHistory } from 'vue-router';
 import App from './App.vue';
 import { installAuthGuard, loadCurrentUser } from './auth';
 import AuthView from './views/AuthView.vue';
+import JobPostsView from './views/JobPostsView.vue';
 import JobsView from './views/JobsView.vue';
+import SchedulesView from './views/SchedulesView.vue';
 
 const router = createRouter({
     history: createWebHistory(),
     routes: [
         { path: '/', name: 'jobs', component: JobsView, meta: { auth: true } },
+        { path: '/jobs/:id(\\d+)', name: 'job', component: JobPostsView, meta: { auth: true }, props: true },
+        { path: '/schedules', name: 'schedules', component: SchedulesView, meta: { auth: true } },
         { path: '/login', name: 'login', component: AuthView, props: { mode: 'login' } },
         { path: '/register', name: 'register', component: AuthView, props: { mode: 'register' } },
         { path: '/:pathMatch(.*)*', redirect: '/' },

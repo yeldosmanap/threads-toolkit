@@ -177,7 +177,7 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	file, err := export.BuildXLSX(saved)
+	file, err := export.BuildXLSX(saved, job.IsFirstRun)
 	if err == nil {
 		// ASCII-only object key: some S3 implementations sign non-ASCII paths differently.
 		// The human-readable (possibly Cyrillic) name is applied at download via Content-Disposition.

@@ -16,3 +16,11 @@ node_modules
 
 # Saved Threads login sessions (npm run login)
 .auth
+
+# Web service parts are built from their own folders, not part of the scraper image
+backend
+web
+deploy
+exports
+*.xlsx
+.env

@@ -41,11 +41,14 @@ type Job struct {
 	Error         *string
 	FileKey       *string
 	Attempts      int
+	ScheduleID    *int64
 	CreatedAt     time.Time
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
 	// Approximate place in the global queue (1 = next), only for queued jobs
 	QueuePosition *int
+	// No earlier run of the same search (user + keyword) has results, so "new" flags carry no information
+	IsFirstRun bool
 }
 
 // Post is one scraped post as received from the worker.

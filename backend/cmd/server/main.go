@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// Embed the IANA timezone database: the distroless image has none, and daily schedules need it
+	_ "time/tzdata"
 
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/api"
 	"github.com/yeldosmanap/threads-toolkit/backend/internal/config"
@@ -56,6 +58,7 @@ func run(log *slog.Logger) error {
 	}
 
 	go maintenance(ctx, st, cfg, log)
+	go scheduler(ctx, st, cfg, log)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -98,6 +101,26 @@ func maintenance(ctx context.Context, st *store.Store, cfg config.Config, log *s
 		}
 		if _, err := st.DeleteExpiredSessions(ctx); err != nil && ctx.Err() == nil {
 			log.Error("delete expired sessions", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// scheduler turns due recurring searches into queued jobs.
+func scheduler(ctx context.Context, st *store.Store, cfg config.Config, log *slog.Logger) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	limits := store.ScheduleLimits{ActiveJobs: cfg.QuotaActiveJobs, DailyJobs: cfg.QuotaDailyJobs}
+	for {
+		res, err := st.RunDueSchedules(ctx, time.Now(), limits)
+		if err != nil && ctx.Err() == nil {
+			log.Error("run due schedules", "err", err)
+		} else if res.Started+res.Skipped > 0 {
+			log.Info("schedules", "started", res.Started, "skipped", res.Skipped)
 		}
 		select {
 		case <-ctx.Done():

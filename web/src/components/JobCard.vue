@@ -56,6 +56,7 @@ async function cancel(): Promise<void> {
             <div class="title">
                 <h3>{{ job.keyword }}</h3>
                 <span class="meta muted">
+                    <RouterLink v-if="job.scheduleId" to="/schedules" class="sched">по расписанию</RouterLink>
                     {{ job.filter === 'recent' ? 'Свежие' : 'Популярные' }} · до {{ job.maxItems }} постов ·
                     {{ created }}
                 </span>
@@ -71,12 +72,18 @@ async function cancel(): Promise<void> {
         <div v-else-if="job.status === 'done'" class="result">
             <span>
                 <strong>{{ job.postsCount }}</strong> постов
-                <template v-if="job.newPostsCount !== null">
+                <template v-if="job.isFirstRun"> · <span class="muted">первый поиск по этому слову</span></template>
+                <template v-else-if="job.newPostsCount !== null">
                     · <strong>{{ job.newPostsCount }}</strong> новых
                 </template>
                 <span v-if="duration" class="muted"> · {{ duration }}</span>
             </span>
-            <a v-if="job.hasFile" class="btn small" :href="api.downloadUrl(job.id)" download>Скачать .xlsx</a>
+            <span class="actions">
+                <RouterLink class="btn secondary small" :to="{ name: 'job', params: { id: job.id } }">
+                    Посмотреть посты
+                </RouterLink>
+                <a v-if="job.hasFile" class="btn small" :href="api.downloadUrl(job.id)" download>Скачать .xlsx</a>
+            </span>
         </div>
 
         <p v-else-if="job.status === 'failed'" class="error-box">{{ job.error || 'Неизвестная ошибка' }}</p>
@@ -113,6 +120,17 @@ h3 {
 
 .meta {
     font-size: 13px;
+}
+
+.sched {
+    margin-right: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
 }
 
 .badge {
@@ -175,6 +193,12 @@ h3 {
     gap: 8px 12px;
     margin-top: 12px;
     font-size: 14px;
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 .error-box {

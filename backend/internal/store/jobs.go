@@ -12,13 +12,13 @@ import (
 )
 
 const jobColumns = `j.id, j.user_id, j.keyword, j.filter, j.max_items, j.status, j.posts_seen,
-	j.posts_count, j.new_posts_count, j.error, j.file_key, j.attempts,
+	j.posts_count, j.new_posts_count, j.error, j.file_key, j.attempts, j.schedule_id,
 	j.created_at, j.started_at, j.finished_at`
 
 func scanJob(row pgx.Row, extra ...any) (Job, error) {
 	var j Job
 	dest := []any{&j.ID, &j.UserID, &j.Keyword, &j.Filter, &j.MaxItems, &j.Status, &j.PostsSeen,
-		&j.PostsCount, &j.NewPostsCount, &j.Error, &j.FileKey, &j.Attempts,
+		&j.PostsCount, &j.NewPostsCount, &j.Error, &j.FileKey, &j.Attempts, &j.ScheduleID,
 		&j.CreatedAt, &j.StartedAt, &j.FinishedAt}
 	err := row.Scan(append(dest, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -56,12 +56,18 @@ func (s *Store) CreateJob(ctx context.Context, userID int64, keyword, filter str
 		userID, keyword, NormalizeKeyword(keyword), filter, maxItems))
 }
 
-const queuePositionExpr = `CASE WHEN j.status = 'queued' THEN
-	(SELECT count(*) FROM jobs q WHERE q.status = 'queued' AND q.created_at <= j.created_at)::int END`
+// Extra columns for user-facing job reads: queue position and "first run of this search".
+// isFirstRun mirrors the is_new rule in SaveResults: an earlier job of the same search with saved posts.
+const jobExtraExpr = `CASE WHEN j.status = 'queued' THEN
+	(SELECT count(*) FROM jobs q WHERE q.status = 'queued' AND q.created_at <= j.created_at)::int END,
+	NOT EXISTS (
+		SELECT 1 FROM jobs pj JOIN job_posts jp ON jp.job_id = pj.id
+		WHERE pj.user_id = j.user_id AND pj.keyword_norm = j.keyword_norm AND pj.id < j.id
+	)`
 
 func (s *Store) ListJobs(ctx context.Context, userID int64, limit int) ([]Job, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+jobColumns+`, `+queuePositionExpr+`
+		`SELECT `+jobColumns+`, `+jobExtraExpr+`
 		 FROM jobs j WHERE j.user_id = $1 ORDER BY j.created_at DESC LIMIT $2`,
 		userID, limit)
 	if err != nil {
@@ -71,11 +77,12 @@ func (s *Store) ListJobs(ctx context.Context, userID int64, limit int) ([]Job, e
 	jobs := []Job{}
 	for rows.Next() {
 		var pos *int
-		j, err := scanJob(rows, &pos)
+		var first bool
+		j, err := scanJob(rows, &pos, &first)
 		if err != nil {
 			return nil, err
 		}
-		j.QueuePosition = pos
+		j.QueuePosition, j.IsFirstRun = pos, first
 		jobs = append(jobs, j)
 	}
 	return jobs, rows.Err()
@@ -84,16 +91,21 @@ func (s *Store) ListJobs(ctx context.Context, userID int64, limit int) ([]Job, e
 // GetJob returns a job only if it belongs to the user.
 func (s *Store) GetJob(ctx context.Context, userID, jobID int64) (Job, error) {
 	var pos *int
+	var first bool
 	j, err := scanJob(s.pool.QueryRow(ctx,
-		`SELECT `+jobColumns+`, `+queuePositionExpr+` FROM jobs j WHERE j.id = $1 AND j.user_id = $2`,
-		jobID, userID), &pos)
-	j.QueuePosition = pos
+		`SELECT `+jobColumns+`, `+jobExtraExpr+` FROM jobs j WHERE j.id = $1 AND j.user_id = $2`,
+		jobID, userID), &pos, &first)
+	j.QueuePosition, j.IsFirstRun = pos, first
 	return j, err
 }
 
 // GetJobByID is for internal (worker) use - no ownership check.
 func (s *Store) GetJobByID(ctx context.Context, jobID int64) (Job, error) {
-	return scanJob(s.pool.QueryRow(ctx, `SELECT `+jobColumns+` FROM jobs j WHERE j.id = $1`, jobID))
+	var pos *int
+	var first bool
+	j, err := scanJob(s.pool.QueryRow(ctx, `SELECT `+jobColumns+`, `+jobExtraExpr+` FROM jobs j WHERE j.id = $1`, jobID), &pos, &first)
+	j.QueuePosition, j.IsFirstRun = pos, first
+	return j, err
 }
 
 // CancelJob cancels a queued job. Running jobs cannot be canceled (the browser is already working).

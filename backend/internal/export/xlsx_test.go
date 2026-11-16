@@ -19,7 +19,7 @@ func TestBuildXLSX(t *testing.T) {
 		{Post: store.Post{ID: "c", URL: "https://www.threads.com/@z/post/c", AuthorUsername: "z", Content: "без даты"}, IsNew: true},
 	}
 
-	data, err := BuildXLSX(posts)
+	data, err := BuildXLSX(posts, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,5 +58,26 @@ func TestBuildXLSX(t *testing.T) {
 	link, target, err := f.GetCellHyperLink("Все посты", "P2")
 	if err != nil || !link || target != "https://www.threads.com/@y/post/b" {
 		t.Errorf("post url hyperlink = %v %q %v", link, target, err)
+	}
+}
+
+func TestBuildXLSXFirstRun(t *testing.T) {
+	ts := time.Date(2026, 11, 16, 13, 0, 0, 0, time.UTC)
+	data, err := BuildXLSX([]store.SavedPost{
+		{Post: store.Post{ID: "a", URL: "https://www.threads.com/@x/post/a", AuthorUsername: "x", Content: "c", PublishedAt: &ts}, IsNew: true},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := excelize.OpenReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if sheets := f.GetSheetList(); len(sheets) != 1 || sheets[0] != "Все посты" {
+		t.Errorf("first run must only have the all-posts sheet, got %v", sheets)
+	}
+	if v, _ := f.GetCellValue("Все посты", "C2"); v != "" {
+		t.Errorf("new flag must be empty on first run, got %q", v)
 	}
 }

@@ -43,7 +43,8 @@ var columns = []column{
 }
 
 // BuildXLSX returns an .xlsx with all posts (newest first) and a separate sheet with new posts only.
-func BuildXLSX(posts []store.SavedPost) ([]byte, error) {
+// On the first run of a search every post is "new", so the flag column and the "Новые" sheet are omitted.
+func BuildXLSX(posts []store.SavedPost, firstRun bool) ([]byte, error) {
 	f := excelize.NewFile()
 	defer f.Close()
 
@@ -53,6 +54,11 @@ func BuildXLSX(posts []store.SavedPost) ([]byte, error) {
 	}
 
 	all := sortedNewestFirst(posts)
+	if firstRun {
+		for i := range all {
+			all[i].IsNew = false
+		}
+	}
 	var fresh []store.SavedPost
 	for _, p := range all {
 		if p.IsNew {
@@ -66,11 +72,13 @@ func BuildXLSX(posts []store.SavedPost) ([]byte, error) {
 	if err := writeSheet(f, "Все посты", all, styles); err != nil {
 		return nil, err
 	}
-	if _, err := f.NewSheet("Новые"); err != nil {
-		return nil, err
-	}
-	if err := writeSheet(f, "Новые", fresh, styles); err != nil {
-		return nil, err
+	if !firstRun {
+		if _, err := f.NewSheet("Новые"); err != nil {
+			return nil, err
+		}
+		if err := writeSheet(f, "Новые", fresh, styles); err != nil {
+			return nil, err
+		}
 	}
 
 	buf, err := f.WriteToBuffer()

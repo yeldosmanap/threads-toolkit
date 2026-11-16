@@ -70,6 +70,11 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/jobs/{id}", s.handleGetJob)
 			r.Post("/jobs/{id}/cancel", s.handleCancelJob)
 			r.Get("/jobs/{id}/download", s.handleDownload)
+			r.Get("/jobs/{id}/posts", s.handleListJobPosts)
+			r.Get("/schedules", s.handleListSchedules)
+			r.Post("/schedules", s.handleCreateSchedule)
+			r.Put("/schedules/{id}", s.handleUpdateSchedule)
+			r.Delete("/schedules/{id}", s.handleDeleteSchedule)
 		})
 	})
 

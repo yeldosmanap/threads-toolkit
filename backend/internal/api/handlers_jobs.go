@@ -29,6 +29,8 @@ type jobResponse struct {
 	Error         *string    `json:"error"`
 	HasFile       bool       `json:"hasFile"`
 	QueuePosition *int       `json:"queuePosition"`
+	IsFirstRun    bool       `json:"isFirstRun"`
+	ScheduleID    *int64     `json:"scheduleId"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	StartedAt     *time.Time `json:"startedAt"`
 	FinishedAt    *time.Time `json:"finishedAt"`
@@ -38,7 +40,7 @@ func toJobResponse(j store.Job) jobResponse {
 	return jobResponse{
 		ID: j.ID, Keyword: j.Keyword, Filter: j.Filter, MaxItems: j.MaxItems, Status: j.Status,
 		PostsSeen: j.PostsSeen, PostsCount: j.PostsCount, NewPostsCount: j.NewPostsCount, Error: j.Error,
-		HasFile: j.FileKey != nil, QueuePosition: j.QueuePosition,
+		HasFile: j.FileKey != nil, QueuePosition: j.QueuePosition, IsFirstRun: j.IsFirstRun, ScheduleID: j.ScheduleID,
 		CreatedAt: j.CreatedAt, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
 	}
 }
@@ -91,12 +93,14 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{
-		"maxItemsLimit":   s.cfg.MaxItemsLimit,
-		"defaultMaxItems": s.cfg.DefaultMaxItems,
-		"activeJobs":      active,
-		"activeJobsLimit": s.cfg.QuotaActiveJobs,
-		"dailyJobs":       daily,
-		"dailyJobsLimit":  s.cfg.QuotaDailyJobs,
+		"maxItemsLimit":    s.cfg.MaxItemsLimit,
+		"defaultMaxItems":  s.cfg.DefaultMaxItems,
+		"activeJobs":       active,
+		"activeJobsLimit":  s.cfg.QuotaActiveJobs,
+		"dailyJobs":        daily,
+		"dailyJobsLimit":   s.cfg.QuotaDailyJobs,
+		"schedulesLimit":   s.cfg.QuotaSchedules,
+		"minScheduleHours": s.cfg.MinScheduleHours,
 	})
 }
 
